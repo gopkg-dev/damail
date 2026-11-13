@@ -4,11 +4,12 @@ import starlight from '@astrojs/starlight';
 import { defineConfig } from 'astro/config';
 
 const REPO = 'https://github.com/gopkg-dev/damail';
+const SITE = 'https://damail.app';
 
 const group = (zh, en, items) => ({ label: en, translations: { 'zh-CN': zh }, items });
 
 export default defineConfig({
-  site: 'https://damail.app',
+  site: SITE,
   trailingSlash: 'always',
   devToolbar: { enabled: false },
   integrations: [
@@ -17,6 +18,13 @@ export default defineConfig({
       description: 'Self-hosted mail hub that gives AI agents safe access to your mail through MCP and a REST API',
       logo: { src: './src/assets/logo.svg', alt: 'DaMail' },
       favicon: '/favicon.svg',
+      // Starlight 自带 og:title / og:description / twitter:card，这里补上分享图
+      head: [
+        { tag: 'meta', attrs: { property: 'og:image', content: `${SITE}/og-image.png` } },
+        { tag: 'meta', attrs: { property: 'og:image:width', content: '1200' } },
+        { tag: 'meta', attrs: { property: 'og:image:height', content: '630' } },
+        { tag: 'meta', attrs: { name: 'twitter:image', content: `${SITE}/og-image.png` } },
+      ],
       defaultLocale: 'root',
       locales: {
         root: { label: 'English', lang: 'en' },
