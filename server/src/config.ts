@@ -3,7 +3,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { L } from './i18n/context.js';
 
-const env = process.env;
+// 空字符串视为未设置：docker-compose.yml 用 ${VAR:-} 透传，没填的变量会以空值传进来
+const env: Record<string, string | undefined> = Object.fromEntries(Object.entries(process.env).filter(([, v]) => v !== ''));
 
 const dataDir = path.resolve(env.DATA_DIR ?? './data');
 mkdirSync(dataDir, { recursive: true });
