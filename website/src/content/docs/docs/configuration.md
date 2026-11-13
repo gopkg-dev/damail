@@ -50,4 +50,4 @@ OAuth for ChatGPT and similar clients is best configured under **Settings → OA
 | `MCP_OAUTH_REFRESH_TOKEN_TTL_SEC` | `2592000` | Refresh token lifetime (30 days) |
 | `MCP_OAUTH_RATE_LIMIT_PER_MIN` | `60` | Requests per IP per minute to the OAuth endpoints |
 
-See [.env.example](https://github.com/gopkg-dev/damail/blob/main/.env.example) in the repository for the full list.
+See [server/src/config.ts](https://github.com/gopkg-dev/damail/blob/main/server/src/config.ts) in the repository for every variable and its default.

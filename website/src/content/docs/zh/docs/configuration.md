@@ -50,4 +50,4 @@ ChatGPT 等客户端的 OAuth 接入推荐在网页「设置 → OAuth 设置」
 | `MCP_OAUTH_REFRESH_TOKEN_TTL_SEC` | `2592000` | refresh token 有效期（30 天） |
 | `MCP_OAUTH_RATE_LIMIT_PER_MIN` | `60` | OAuth 端点每个 IP 每分钟请求上限 |
 
-完整列表见仓库里的 [.env.example](https://github.com/gopkg-dev/damail/blob/main/.env.example)。
+全部环境变量及默认值见仓库里的 [server/src/config.ts](https://github.com/gopkg-dev/damail/blob/main/server/src/config.ts)。
