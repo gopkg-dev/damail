@@ -49,9 +49,22 @@ Clients that cannot take an API key, such as ChatGPT, sign in with OAuth — see
 - Keys can only change drafts they created; approving or rejecting happens in the web app only
 - Model and notification channel settings contain secrets and can only be managed in the web app
 
+## Sending with and without `send`
+
+Here is what happens when an agent sends the same test email:
+
+| | Without `send` | With `send` |
+|---|---|---|
+| Tools | `request_send` | `request_send` and `send_draft` |
+| What happens | The email goes to **Drafts → Awaiting approval** and is sent only after you approve it in the web app | The email is sent after `SEND_DELAY_SEC` seconds (10 by default), with no approval step |
+| How you stop it | Edit, approve or reject it | Undo it within the delay window |
+| Limits | None needed | Over [OAuth](/docs/oauth/), each grant can send at most 10 emails per hour (adjustable in settings, 0 turns direct sending off). API keys have no hourly cap, so grant `send` to a key with care |
+
+Even with `send`, the MCP instructions tell agents to use `request_send` unless you explicitly ask them to send directly.
+
 ## Safety
 
-- **Approval before sending**: mail written by an agent goes to “Pending approval” for you to edit, approve or reject. Only keys with `send` can send directly, and there is still a `SEND_DELAY_SEC` undo window
+- **Approval before sending**: by default, mail written by an agent goes to “Awaiting approval” for you to edit, approve or reject. Only keys with `send` can send directly, and there is still a `SEND_DELAY_SEC` undo window (see [Sending with and without `send`](#sending-with-and-without-send))
 - **Mail is untrusted**: the MCP instructions tell agents to treat message bodies as data and never follow instructions inside them
 - **Audit log**: every API and MCP call is recorded under **Audit**, filterable by key
 

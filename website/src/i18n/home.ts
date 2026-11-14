@@ -171,7 +171,7 @@ const zh = {
   agents: {
     kicker: 'AI Agent',
     title: 'Agent 能帮你回信，发不发由你说了算',
-    lead: '通过 MCP 接入 Claude、ChatGPT 等 AI 助手，权限和邮箱你来勾选，邮件你批准才发。',
+    lead: '通过 MCP 接入 Claude、ChatGPT 等 AI 助手，权限和邮箱你来勾选，邮件默认要你批准才发。',
     consent: {
       title: '授权：给多少由你定',
       desc: '按权限和邮箱逐项勾选，随时可以撤销。',
@@ -267,7 +267,7 @@ const en: typeof zh = {
   lang: 'en',
   title: 'DaMail · All your mailboxes, on your own server',
   description:
-    'Open-source, self-hosted mail hub: every mailbox synced in real time, AI that reads with you, and agents that reply through MCP. Nothing is sent without your OK.',
+    'Open-source, self-hosted mail hub: every mailbox synced in real time, AI that reads with you, and agents that reply through MCP. You decide what gets sent.',
   nav: {
     features: 'Features',
     agents: 'AI agents',
@@ -281,7 +281,7 @@ const en: typeof zh = {
   hero: {
     badge: 'Open source · MIT · Self-hosted',
     title: ['All your mailboxes,', 'on your own server'],
-    lead: 'One self-hosted service for every mailbox you have. AI reads with you, agents reply for you, and nothing is sent without your OK.',
+    lead: 'One self-hosted service for every mailbox you have. AI reads with you, agents reply for you, and you decide what gets sent.',
     primary: 'Get started',
     secondary: 'View on GitHub',
     copy: 'Copy',
@@ -435,7 +435,7 @@ const en: typeof zh = {
   agents: {
     kicker: 'AI agents',
     title: 'Agents draft your replies. You decide what gets sent',
-    lead: 'Connect Claude, ChatGPT and other assistants over MCP. You pick the permissions and mailboxes, and mail goes out only after you approve it.',
+    lead: 'Connect Claude, ChatGPT and other assistants over MCP. You pick the permissions and mailboxes, and by default mail goes out only after you approve it.',
     consent: {
       title: 'Authorize: you set the limits',
       desc: 'Pick the permissions and mailboxes. Revoke any time.',

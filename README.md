@@ -9,7 +9,7 @@
 DaMail is a self-hosted mail hub. It syncs every mailbox you own into one place and adds AI triage and automation.<br />
 AI agents get scoped, auditable access to it through MCP and a REST API.
 
-<sub>The name sounds like <i>dame</i> (だめ), Japanese for “nope”: no agent sends a single email without your OK.</sub>
+<sub>The name sounds like <i>dame</i> (だめ), Japanese for “nope”: no agent sends a single email without your OK, given per email or by granting it <code>send</code>.</sub>
 
 [![Release](https://img.shields.io/github/v/release/gopkg-dev/damail?sort=semver&color=1677ff)](https://github.com/gopkg-dev/damail/releases)
 [![Build](https://img.shields.io/github/actions/workflow/status/gopkg-dev/damail/release.yml?label=build)](https://github.com/gopkg-dev/damail/actions/workflows/release.yml)
@@ -26,7 +26,7 @@ AI agents get scoped, auditable access to it through MCP and a REST API.
 
 - **One inbox for every account.** DaMail works with Gmail, Outlook, iCloud, QQ Mail, NetEase 163, Tencent and Alibaba business mail, and any IMAP server. Mail syncs in real time and is threaded and searchable. Changes you make are written back to the mail server.
 - **AI that works for you.** It can sort mail, set priority, write summaries and pull out codes, bills and to-dos. It uses the model you choose: Claude, any OpenAI-compatible API, or a local model. AI is off by default.
-- **Agents get only the access you grant.** Claude Duet, ChatGPT dots, Grok Bot, Meta Muse, Claude Code, Cursor and other agents use credentials issued by DaMail. Each credential covers only the permissions and mailboxes you pick. Mail an agent writes waits for your approval.
+- **Agents get only the access you grant.** Claude Duet, ChatGPT dots, Grok Bot, Meta Muse, Claude Code, Cursor and other agents use credentials issued by DaMail. Each credential covers only the permissions and mailboxes you pick. By default, mail an agent writes waits for your approval.
 - **Your data stays with you.** You host it yourself. Mailbox credentials are encrypted with your own master key. HTML mail renders in a sandbox with remote images blocked. No third-party service sits in between.
 
 ## Features
@@ -90,7 +90,16 @@ claude mcp add --transport http damail https://mail.example.com/mcp \
 
 **AI assistants.** Proactive assistants such as **Claude Duet**, **ChatGPT dots**, **Grok Bot** and **Meta Muse** connect the same way, through their custom connector settings with OAuth. Once connected they can brief you on new mail, flag what needs a reply and draft answers for your approval. Setup for each assistant is in [AI assistants](https://damail.app/docs/assistants/).
 
-An agent never sees tools it isn't allowed to use. Without the `send` permission, mail it writes goes to **Drafts → Awaiting approval**.
+An agent never sees tools it isn't allowed to use. Here is what happens when an agent sends the same test email with and without `send`:
+
+| | Without `send` | With `send` |
+| --- | --- | --- |
+| Tools | `request_send` | `request_send` and `send_draft` |
+| What happens | The email goes to **Drafts → Awaiting approval** and is sent only after you approve it on the web | The email is sent after `SEND_DELAY_SEC` seconds (10 by default), with no approval step |
+| How you stop it | Edit, approve or reject it | Undo it within the delay window |
+| Limits | None needed | Over OAuth, each authorization can send at most 10 emails per hour (adjustable in settings, 0 turns direct sending off). API keys have no hourly cap |
+
+Even with `send`, the MCP instructions tell agents to use `request_send` unless you explicitly ask them to send directly.
 
 ## Documentation
 
