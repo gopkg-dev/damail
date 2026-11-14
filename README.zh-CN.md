@@ -9,7 +9,7 @@
 开源、自托管的多邮箱聚合服务：把你名下的所有邮箱同步到一处，加上 AI 分析与自动化，<br />
 再通过 MCP 和 REST API，按权限、可审计地交给 AI Agent 使用。
 
-<sub>名字读作「哒咩」（日语 だめ，“不行”）：没有你点头，Agent 一封信也发不出去。</sub>
+<sub>名字读作「哒咩」（日语 だめ，“不行”）：没有你点头（逐封批准，或亲手授予 <code>send</code> 权限），Agent 一封信也发不出去。</sub>
 
 [![Release](https://img.shields.io/github/v/release/gopkg-dev/damail?sort=semver&color=1677ff)](https://github.com/gopkg-dev/damail/releases)
 [![Build](https://img.shields.io/github/actions/workflow/status/gopkg-dev/damail/release.yml?label=build)](https://github.com/gopkg-dev/damail/actions/workflows/release.yml)
@@ -90,7 +90,16 @@ claude mcp add --transport http damail https://mail.example.com/mcp \
 
 **AI 助手**：**Claude Duet**、**ChatGPT dots**、**Grok Bot**、**Meta Muse** 等主动型助手也是同样的方式，在它们的自定义连接器里用 OAuth 接入。接上之后，它们可以给你做新邮件简报、提醒需要回复的邮件，并起草回复等你审批。各助手的步骤见[接入 AI 助手](https://damail.app/zh/docs/assistants/)。
 
-Agent 看不到它无权使用的工具；没有 `send` 权限时，它写的邮件会进入「草稿 → 待审批」。
+Agent 看不到它无权使用的工具。同一封测试邮件，在有无 `send` 权限时的区别如下：
+
+| | 没有 `send` | 有 `send` |
+| --- | --- | --- |
+| 可用工具 | `request_send` | `request_send` 和 `send_draft` |
+| 结果 | 进入「草稿 → 待审批」，你在网页上批准后才会发出 | 不经审批，`SEND_DELAY_SEC` 秒后发出（默认 10 秒） |
+| 怎么拦下 | 编辑、批准或拒绝 | 在延迟窗口内撤销 |
+| 限制 | 无需额外限制 | 通过 OAuth 接入时，每个授权每小时最多直发 10 封（可在设置里调整，设为 0 即禁止直发）。API Key 没有每小时上限 |
+
+即使有 `send` 权限，MCP 指令也要求 Agent 除非你明确要求直接发送，否则仍用 `request_send` 交给你审批。
 
 ## 文档
 
