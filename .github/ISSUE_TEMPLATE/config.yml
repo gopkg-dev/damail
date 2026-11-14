@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability / 安全漏洞
+    url: https://github.com/gopkg-dev/damail/security/advisories/new
+    about: Report it privately, never in a public issue. / 请私下报告，不要发公开 issue。
+  - name: Documentation / 文档
+    url: https://damail.app/docs/
+    about: Setup, configuration and how-to guides. / 安装、配置和使用说明。

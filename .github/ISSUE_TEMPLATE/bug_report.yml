@@ -1,0 +1,89 @@
+name: Bug report / 问题反馈
+description: Something doesn't work as expected. / 某个功能和预期不一致。
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! English or Chinese are both fine.
+        感谢反馈！中英文都可以。
+
+        **Do not paste passwords, API keys, tokens or the contents of private mail.** Security issues go to [private vulnerability reporting](https://github.com/gopkg-dev/damail/security/advisories/new).
+        **不要贴密码、API Key、令牌或私人邮件内容。** 安全问题请走[私密漏洞报告](https://github.com/gopkg-dev/damail/security/advisories/new)。
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened / 发生了什么
+      description: What you saw, and what you expected instead. / 你看到了什么，原本期望是什么。
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce / 复现步骤
+      placeholder: |
+        1. Go to …
+        2. Click …
+        3. See …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: DaMail version / 版本
+      description: Shown under Settings → About. / 在「设置 → 关于」里查看。
+      placeholder: v0.2.0
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Installation / 部署方式
+      options:
+        - One-line install script / 一键安装脚本
+        - Docker Compose
+        - From source / 源码运行
+        - Other / 其他
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area / 涉及模块
+      multiple: true
+      options:
+        - Mail sync / 邮件同步
+        - Reading & sending / 收发信
+        - AI analysis / AI 分析
+        - AI assistant / AI 助手
+        - Rules & notifications / 规则与通知
+        - MCP / REST API / OAuth
+        - Web UI / 网页界面
+        - Install & upgrade / 安装与升级
+        - Docs / 文档
+        - Other / 其他
+  - type: input
+    id: provider
+    attributes:
+      label: Mail provider / 邮箱服务商
+      description: If the bug involves a mailbox. / 问题和邮箱有关时填写。
+      placeholder: Gmail, Outlook, QQ Mail, 163, IMAP server …
+  - type: input
+    id: client
+    attributes:
+      label: AI model or agent client / AI 模型或 Agent 客户端
+      description: If the bug involves AI or MCP. / 问题和 AI 或 MCP 有关时填写。
+      placeholder: Claude, an OpenAI-compatible API, Claude Code, ChatGPT …
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / 日志
+      description: |
+        Relevant lines from `docker compose logs app`. Remove mail addresses and other private data first.
+        `docker compose logs app` 里的相关日志。请先去掉邮箱地址等隐私信息。
+      render: text
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else / 其他信息
+      description: Screenshots, browser, OS, reverse proxy … / 截图、浏览器、系统、反向代理等。
