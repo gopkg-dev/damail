@@ -12,7 +12,7 @@ import {
 import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { App, Button, Checkbox, Empty, Flex, Listy, Segmented, Spin, Tooltip, Typography, theme, type ListyRef } from 'antd';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { api, threadBatchAction, type ThreadBatchAction, type ThreadSummary } from '../api';
+import { api, threadBatchAction, withCopies, type ThreadBatchAction, type ThreadSummary } from '../api';
 import { t } from '../i18n';
 import { useAccounts } from '../hooks/data';
 import { colorFor, shortDate } from '../lib/format';
@@ -174,7 +174,8 @@ export function ThreadList({ view, accountId, folderId, inTrash, q, selected, on
     }
     setActing(action);
     try {
-      const res = await threadBatchAction(ids, action);
+      // 合并了副本的会话，副本一起处理
+      const res = await threadBatchAction(withCopies(ids.map((id) => items.find((x) => x.threadId === id) ?? { threadId: id })), action);
       await Promise.all([
         qc.invalidateQueries({ queryKey: ['threads'] }),
         qc.invalidateQueries({ queryKey: ['thread'] }),

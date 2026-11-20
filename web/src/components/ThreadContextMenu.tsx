@@ -19,7 +19,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { App, theme, type MenuProps } from 'antd';
 import dayjs from 'dayjs';
 import { useNavigate } from 'react-router';
-import { api, type ThreadBatchAction, type ThreadSummary } from '../api';
+import { api, withCopies, type ThreadBatchAction, type ThreadSummary } from '../api';
 import { useLabels } from '../hooks/data';
 import { t } from '../i18n';
 import { formatSendAt } from '../lib/format';
@@ -134,7 +134,7 @@ export function ThreadContextMenu({
     if (!l) return;
     const has = threads.every((x) => x.labels.some((b) => b.id === id));
     try {
-      await api('/api/v1/threads/labels', { method: 'POST', body: { threadIds: ids, ...(has ? { remove: [id] } : { add: [id] }) } });
+      await api('/api/v1/threads/labels', { method: 'POST', body: { threadIds: withCopies(threads), ...(has ? { remove: [id] } : { add: [id] }) } });
       message.success(has ? t.threads.ctx.labelRemoved(labelName(l), ids.length) : t.threads.ctx.labelAdded(labelName(l), ids.length));
       await refresh();
     } catch (e) {

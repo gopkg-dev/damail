@@ -89,6 +89,8 @@ export type ThreadSummary = {
   labels: LabelBrief[];
   // 只在「等回复」视图里有
   waiting?: WaitingInfo;
+  // 全部邮箱视图里合并进这一条的、其他邮箱里同一封邮件的会话；对这一条的操作也作用到它们
+  copyThreadIds?: string[];
 };
 
 /** 标签（分类之外的细分，见 docs/labels.md）。name / description 是请求时界面语言的；names / i18n 是所有语言的，切换语言时用 pickText 取 */
@@ -235,7 +237,11 @@ export type SubscriptionRow = {
 export type SubscriptionFilter = 'all' | 'ignored' | 'unsubscribed';
 export type SubscriptionPage = { items: SubscriptionRow[]; total: number; counts: Record<SubscriptionFilter, number> };
 
-export type Thread = { threadId: string; subject: string; messages: MessageDetail[] };
+// copyThreadIds：其他邮箱里同一封邮件（最新一封）所在的会话，全部邮箱视图里打开时操作一起作用到它们
+export type Thread = { threadId: string; subject: string; messages: MessageDetail[]; copyThreadIds?: string[] };
+
+/** 加上合并进来的副本会话（全部邮箱视图里同一封邮件收到多个邮箱时） */
+export const withCopies = (threads: Pick<ThreadSummary, 'threadId' | 'copyThreadIds'>[]) => threads.flatMap((x) => [x.threadId, ...(x.copyThreadIds ?? [])]);
 
 export type Provider = {
   id: string;

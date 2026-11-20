@@ -43,14 +43,14 @@ function startFakeAi() {
 }
 
 let uid = 1000;
-async function addCopy(account: 'work' | 'home', o: { messageId: string; from?: string; subject?: string; date?: Date }) {
+async function addCopy(account: 'work' | 'home', o: { messageId: string; from?: string; subject?: string; date?: Date; threadId?: string }) {
   const [m] = await env.db
     .insert(env.schema.messages)
     .values({
       accountId: env.accounts[account].id,
       folderId: folderIds[account],
       uid: uid++,
-      threadId: `t-${uid}`,
+      threadId: o.threadId ?? `t-${uid}`,
       messageId: o.messageId,
       subject: o.subject ?? '季度预算评审',
       fromAddress: o.from ?? 'boss@corp.example',
@@ -250,5 +250,80 @@ describe('日报周报跨邮箱去重', () => {
     await env.db.update(env.schema.messages).set({ answered: true }).where(eq(env.schema.messages.id, b.id));
     data = await reportsMod.collectReportData(start, until, reportsMod.addDays(start, -1));
     assert.equal(data.needsReply.filter((i) => i.subject === '季度预算评审' && i.from === 'Boss').length, 0);
+  });
+});
+
+describe('全部邮箱视图合并副本', () => {
+  const ALL = { accountIds: null };
+
+  test('同一封邮件在全部邮箱视图里合成一条，单个邮箱里各显示各的', async () => {
+    const mail = await import('../src/services/mail.js');
+    const subject = '合并视图测试';
+    const a = await addCopy('work', { messageId: '<merge@corp.example>', subject, date: new Date() });
+    const b = await addCopy('home', { messageId: '<merge@corp.example>', subject, date: new Date() });
+    // 伪造的 Message-ID（发件人不同）不合并
+    const c = await addCopy('home', { messageId: '<merge@corp.example>', subject, date: new Date(), from: 'other@else.example' });
+    await env.db.update(env.schema.messages).set({ seen: true }).where(eq(env.schema.messages.id, a.id));
+
+    const all = (await mail.listThreads({ scope: ALL, view: 'inbox', limit: 100 })).items.filter((t) => t.subject === subject);
+    assert.equal(all.length, 2);
+    const row = all.find((t) => t.threadId !== c.threadId)!;
+    const other = row.threadId === a.threadId ? b.threadId : a.threadId;
+    assert.deepEqual(row.copyThreadIds, [other]);
+    assert.deepEqual([...row.accountIds].sort(), [env.accounts.work.id, env.accounts.home.id].sort());
+    assert.equal(row.unread, true, '副本未读也算未读');
+    assert.equal(all.find((t) => t.threadId === c.threadId)!.copyThreadIds, undefined);
+
+    const work = (await mail.listThreads({ scope: ALL, view: 'inbox', accountId: env.accounts.work.id, limit: 100 })).items.filter(
+      (t) => t.subject === subject,
+    );
+    assert.equal(work.length, 1);
+    assert.equal(work[0]!.copyThreadIds, undefined);
+    assert.equal(work[0]!.unread, false);
+
+    // 打开会话时能拿到副本会话；API Key 只能看一个邮箱时看不到另一个邮箱的副本
+    assert.deepEqual((await mail.getThread(ALL, a.threadId))?.copyThreadIds, [b.threadId]);
+    assert.deepEqual((await mail.getThread({ accountIds: [env.accounts.work.id] }, a.threadId))?.copyThreadIds, []);
+    const scoped = (await mail.listThreads({ scope: { accountIds: [env.accounts.home.id] }, view: 'inbox', limit: 100 })).items.filter(
+      (t) => t.subject === subject,
+    );
+    assert.equal(scoped.length, 2);
+    assert.ok(scoped.every((t) => !t.copyThreadIds));
+  });
+
+  test('一个邮箱的会话后来多了一封回复：另一个邮箱的会话并进去', async () => {
+    const mail = await import('../src/services/mail.js');
+    const subject = '包含合并测试';
+    const t0 = Date.now() - 60_000;
+    const workThread = `work-${uid}`;
+    const homeThread = `home-${uid}`;
+    // 两个邮箱都有原邮件和第一封回复，home 那边后来又多了一封回复
+    for (const [account, threadId] of [
+      ['work', workThread],
+      ['home', homeThread],
+    ] as const) {
+      await addCopy(account, { messageId: '<contain-1@corp.example>', subject, threadId, date: new Date(t0) });
+      await addCopy(account, {
+        messageId: '<contain-2@corp.example>',
+        subject: `Re: ${subject}`,
+        from: 'alice@corp.example',
+        threadId,
+        date: new Date(t0 + 1000),
+      });
+    }
+    await addCopy('home', { messageId: '<contain-3@corp.example>', subject: `Re: ${subject}`, threadId: homeThread, date: new Date(t0 + 2000) });
+
+    const rows = (await mail.listThreads({ scope: ALL, view: 'all', q: `subject:"${subject}"`, limit: 100 })).items;
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]!.threadId, homeThread);
+    assert.deepEqual(rows[0]!.copyThreadIds, [workThread]);
+    assert.deepEqual((await mail.getThread(ALL, homeThread))?.copyThreadIds, [workThread]);
+
+    // 单个邮箱里各显示各的
+    const work = (await mail.listThreads({ scope: ALL, view: 'all', accountId: env.accounts.work.id, q: `subject:"${subject}"`, limit: 100 })).items;
+    assert.deepEqual(
+      work.map((t) => t.threadId),
+      [workThread],
+    );
   });
 });
