@@ -176,6 +176,13 @@
       "when": 1794484891792,
       "tag": "0024_session_epoch",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1795172740032,
+      "tag": "0025_message_id_global",
+      "breakpoints": true
     }
   ]
 }

@@ -1,7 +1,19 @@
 import { and, arrayOverlaps, desc, eq, inArray, isNull, not, sql } from 'drizzle-orm';
 import type { AuthContext } from '../auth/index.js';
 import { db } from '../db/index.js';
-import { accounts, channels, folders, jobs, messageInsights, messages, rules, type Message, type MessageInsight, type Rule } from '../db/schema.js';
+import {
+  accounts,
+  channels,
+  folders,
+  jobs,
+  messageInsights,
+  messageLabels,
+  messages,
+  rules,
+  type Message,
+  type MessageInsight,
+  type Rule,
+} from '../db/schema.js';
 import { L } from '../i18n/index.js';
 import { audit } from '../lib/audit.js';
 import { bus } from '../lib/events.js';
@@ -59,6 +71,82 @@ export async function saveInsight(messageId: number, insight: Omit<MessageInsigh
     .onConflictDoUpdate({ target: messageInsights.messageId, set: { ...insight, createdAt: new Date() } })
     .returning();
   return row!;
+}
+
+/**
+ * 同一封邮件收到多个邮箱时，每个邮箱各有一份副本。按 Message-ID 找其他副本，发件人和主题也要一致，
+ * 免得伪造的 Message-ID 拿到别的邮件的分析结果
+ */
+async function copiesOf(m: Message): Promise<number[]> {
+  if (!m.messageId) return [];
+  const rows = await db
+    .select({ id: messages.id })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.messageId, m.messageId),
+        not(eq(messages.id, m.id)),
+        sql`lower(coalesce(${messages.fromAddress}, '')) = lower(${m.fromAddress ?? ''})`,
+        eq(messages.subject, m.subject),
+      ),
+    );
+  return rows.map((r) => r.id);
+}
+
+/** 副本已有的分析结果（取最新的一份）和它上面 AI 打的标签 */
+async function copiedInsight(copies: number[]) {
+  if (!copies.length) return null;
+  const [src] = await db.select().from(messageInsights).where(inArray(messageInsights.messageId, copies)).orderBy(desc(messageInsights.createdAt)).limit(1);
+  if (!src) return null;
+  const labels = await db
+    .select({ labelId: messageLabels.labelId })
+    .from(messageLabels)
+    .where(and(eq(messageLabels.messageId, src.messageId), eq(messageLabels.source, 'ai'), eq(messageLabels.removed, false)));
+  const { messageId, createdAt: _, ...insight } = src;
+  return { from: messageId, insight, labelIds: labels.map((l) => l.labelId) };
+}
+
+/** 已经为某个副本推送过的渠道：一个渠道对同一封邮件只推送一次 */
+async function notifiedForCopies(copies: number[]): Promise<number[]> {
+  if (!copies.length) return [];
+  const done = await db
+    .select({ result: jobs.result })
+    .from(jobs)
+    .where(
+      and(
+        eq(jobs.type, 'process_message'),
+        eq(jobs.status, 'done'),
+        sql`(${jobs.payload}->>'messageId')::bigint IN (${sql.join(
+          copies.map((id) => sql`${id}`),
+          sql`, `,
+        )})`,
+      ),
+    );
+  const ids = done.flatMap((j) => ((j.result as { notified?: number[] } | null)?.notified ?? []).map(Number));
+  for (const id of copies) ids.push(...(inflightNotified.get(id) ?? []));
+  return ids;
+}
+
+/**
+ * 同一封邮件的副本串行处理：后到的那份等前一份分析完，直接复用结果，不再调用 AI。
+ * inflightNotified 记下刚推送过、任务结果还没写进 jobs 表的渠道
+ */
+const copyLocks = new Map<string, Promise<void>>();
+const inflightNotified = new Map<number, number[]>();
+
+async function serialized<T>(key: string | null, fn: () => Promise<T>): Promise<T> {
+  if (!key) return fn();
+  const prev = copyLocks.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const mine = prev.then(() => new Promise<void>((r) => (release = r)));
+  copyLocks.set(key, mine);
+  await prev;
+  try {
+    return await fn();
+  } finally {
+    release();
+    if (copyLocks.get(key) === mine) copyLocks.delete(key);
+  }
 }
 
 /** 规则动作：先执行不改变位置的动作，最后再移动，避免邮件被移走后后续动作找不到它 */
@@ -121,70 +209,106 @@ registerJob(
     const messageId = Number(payload.messageId);
     const m = await db.query.messages.findFirst({ where: eq(messages.id, messageId) });
     if (!m) return { skipped: '邮件已不存在' };
-    const result: Record<string, unknown> = {};
-
-    // 1. AI 分析
-    let insight = (await db.query.messageInsights.findFirst({ where: eq(messageInsights.messageId, m.id) })) ?? null;
-    const ai = await getAiConfig();
-    // 自动分析看开关和范围；补做（analyzeOnly）和重新分析是手动发起的，只要求 AI 启用
-    const auto = ai.analysisEnabled && (!ai.accountIds || ai.accountIds.includes(m.accountId));
-    // 忽略名单里的发件人一律不送给 AI，手动重新分析也一样
-    const ignored = await isIgnoredSender(m.fromAddress);
-    if (ignored) result.ai = '发件人在忽略名单里';
-    const aiApplies = ai.enabled && !ignored && (auto || !!payload.analyzeOnly || !!payload.reanalyze);
-    if ((!insight || payload.reanalyze) && aiApplies) {
-      try {
-        const out = await classifyMessage(m, ai, await promptLabels());
-        insight = await saveInsight(m.id, out.insight);
-        await applyAiLabels(m.id, out.labelIds);
-        result.category = insight.category;
-        if (out.labelIds.length) result.labels = out.labelIds;
-        bus.publish({ type: 'messages.updated', accountId: m.accountId, folderId: m.folderId });
-      } catch (err) {
-        // 可重试的错误先重试；最后一次仍失败就跳过 AI，规则和通知照常执行。
-        // AI 排队已满这类「暂时没空」的错误总是交给任务队列推迟，不算失败
-        if (err instanceof DeferredError || (err instanceof RetryableError && !ctx.lastAttempt)) throw err;
-        result.aiError = (err as Error).message;
-      }
-    }
-    if (payload.analyzeOnly) return result;
-
-    // 2. 规则
-    const notified = new Set<number>();
-    const matched: string[] = [];
-    const [labelIds, knownLabels] = await Promise.all([messageLabelIds(m.id), allLabelIds()]);
-    for (const rule of (await listRules()).filter((r) => r.enabled)) {
-      if (!ruleMatches(rule, { message: m, insight, labelIds, knownLabels })) continue;
-      const actions = await runActions(rule, m, insight, notified);
-      matched.push(`${rule.name}: ${actions.join(', ')}`);
-      await db
-        .update(rules)
-        .set({ matchCount: sql`${rules.matchCount} + 1`, lastMatchedAt: new Date() })
-        .where(eq(rules.id, rule.id));
-      audit(`rule:${rule.id}`, 'rule.matched', { accountId: m.accountId, target: `message:${m.id}`, detail: { actions } });
-      if (rule.stopProcessing) break;
-    }
-    if (matched.length) result.rules = matched;
-
-    // 3. 订阅了事件的渠道：每个渠道只推送一次，取最具体的事件
-    const events: EventName[] = ['message.received'];
-    if (insight?.priority === 'high') events.unshift('message.important');
-    if (insight?.extracted.codes.length) events.unshift('message.verification');
-    const subscribed = await db
-      .select({ id: channels.id, events: channels.events })
-      .from(channels)
-      .where(and(eq(channels.enabled, true), arrayOverlaps(channels.events, events)));
-    for (const ch of subscribed) {
-      if (notified.has(ch.id)) continue;
-      const event = events.find((e) => ch.events.includes(e))!;
-      notified.add(ch.id);
-      await notifyChannel(ch.id, messageNotice(m, insight, event));
-    }
-    if (notified.size) result.notified = [...notified];
-    return result;
+    return serialized(m.messageId, () => processMessage(m, payload, ctx.lastAttempt));
   },
   3,
 );
+
+async function processMessage(m: Message, payload: Record<string, unknown>, lastAttempt: boolean) {
+  const result: Record<string, unknown> = {};
+  const copies = await copiesOf(m);
+
+  // 1. AI 分析
+  let insight = (await db.query.messageInsights.findFirst({ where: eq(messageInsights.messageId, m.id) })) ?? null;
+  const ai = await getAiConfig();
+  // 自动分析看开关和范围；补做（analyzeOnly）和重新分析是手动发起的，只要求 AI 启用
+  const auto = ai.analysisEnabled && (!ai.accountIds || ai.accountIds.includes(m.accountId));
+  // 忽略名单里的发件人一律不送给 AI，手动重新分析也一样
+  const ignored = await isIgnoredSender(m.fromAddress);
+  if (ignored) result.ai = '发件人在忽略名单里';
+  const aiApplies = ai.enabled && !ignored && (auto || !!payload.analyzeOnly || !!payload.reanalyze);
+  // 其他邮箱里的副本已经分析过，直接复用，不再调用 AI（重新分析除外）
+  const copied = !insight && !payload.reanalyze && aiApplies ? await copiedInsight(copies) : null;
+  if (copied) {
+    insight = await saveInsight(m.id, copied.insight);
+    await applyAiLabels(m.id, copied.labelIds);
+    result.category = insight.category;
+    result.copiedFrom = copied.from;
+    bus.publish({ type: 'messages.updated', accountId: m.accountId, folderId: m.folderId });
+  } else if ((!insight || payload.reanalyze) && aiApplies) {
+    try {
+      const out = await classifyMessage(m, ai, await promptLabels());
+      insight = await saveInsight(m.id, out.insight);
+      await applyAiLabels(m.id, out.labelIds);
+      result.category = insight.category;
+      if (out.labelIds.length) result.labels = out.labelIds;
+      bus.publish({ type: 'messages.updated', accountId: m.accountId, folderId: m.folderId });
+      // 重新分析时，已有分析结果的副本一起更新，免得各邮箱看到的不一样
+      if (payload.reanalyze && copies.length) {
+        const { messageId: _, createdAt: __, ...fresh } = insight;
+        const synced = await db
+          .select({ id: messages.id, accountId: messages.accountId, folderId: messages.folderId })
+          .from(messages)
+          .innerJoin(messageInsights, eq(messageInsights.messageId, messages.id))
+          .where(inArray(messages.id, copies));
+        for (const c of synced) {
+          await saveInsight(c.id, fresh);
+          await applyAiLabels(c.id, out.labelIds);
+          bus.publish({ type: 'messages.updated', accountId: c.accountId, folderId: c.folderId });
+        }
+        if (synced.length) result.syncedCopies = synced.map((c) => c.id);
+      }
+    } catch (err) {
+      // 可重试的错误先重试；最后一次仍失败就跳过 AI，规则和通知照常执行。
+      // AI 排队已满这类「暂时没空」的错误总是交给任务队列推迟，不算失败
+      if (err instanceof DeferredError || (err instanceof RetryableError && !lastAttempt)) throw err;
+      result.aiError = (err as Error).message;
+    }
+  }
+  if (payload.analyzeOnly) return result;
+
+  // 2. 规则：移动、标记这些动作每个邮箱的副本各自执行；推送按渠道去重，同一封邮件只推一次
+  const notified = new Set<number>(await notifiedForCopies(copies));
+  const already = new Set(notified);
+  const matched: string[] = [];
+  const [labelIds, knownLabels] = await Promise.all([messageLabelIds(m.id), allLabelIds()]);
+  for (const rule of (await listRules()).filter((r) => r.enabled)) {
+    if (!ruleMatches(rule, { message: m, insight, labelIds, knownLabels })) continue;
+    const actions = await runActions(rule, m, insight, notified);
+    matched.push(`${rule.name}: ${actions.join(', ')}`);
+    await db
+      .update(rules)
+      .set({ matchCount: sql`${rules.matchCount} + 1`, lastMatchedAt: new Date() })
+      .where(eq(rules.id, rule.id));
+    audit(`rule:${rule.id}`, 'rule.matched', { accountId: m.accountId, target: `message:${m.id}`, detail: { actions } });
+    if (rule.stopProcessing) break;
+  }
+  if (matched.length) result.rules = matched;
+
+  // 3. 订阅了事件的渠道：每个渠道只推送一次，取最具体的事件
+  const events: EventName[] = ['message.received'];
+  if (insight?.priority === 'high') events.unshift('message.important');
+  if (insight?.extracted.codes.length) events.unshift('message.verification');
+  const subscribed = await db
+    .select({ id: channels.id, events: channels.events })
+    .from(channels)
+    .where(and(eq(channels.enabled, true), arrayOverlaps(channels.events, events)));
+  for (const ch of subscribed) {
+    if (notified.has(ch.id)) continue;
+    const event = events.find((e) => ch.events.includes(e))!;
+    notified.add(ch.id);
+    await notifyChannel(ch.id, messageNotice(m, insight, event));
+  }
+  const sent = [...notified].filter((id) => !already.has(id));
+  if (sent.length) {
+    result.notified = sent;
+    // 任务结果写进 jobs 表之前，后面的副本靠这里知道已经推送过；过一会儿 jobs 表里就有了
+    inflightNotified.set(m.id, sent);
+    setTimeout(() => inflightNotified.delete(m.id), 60_000).unref();
+  }
+  if (already.size) result.notifiedByCopy = [...already];
+  return result;
+}
 
 /** 同步到新邮件时调用：只处理收件箱里的、近期的邮件（首次回溯和移回收件箱的旧邮件不触发） */
 export async function onNewMessage(messageId: number, date: Date) {

@@ -1,0 +1,1 @@
+CREATE INDEX "messages_message_id_global" ON "messages" USING btree ("message_id") WHERE "messages"."message_id" IS NOT NULL;
