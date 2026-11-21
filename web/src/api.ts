@@ -237,8 +237,8 @@ export type SubscriptionRow = {
 export type SubscriptionFilter = 'all' | 'ignored' | 'unsubscribed';
 export type SubscriptionPage = { items: SubscriptionRow[]; total: number; counts: Record<SubscriptionFilter, number> };
 
-// copyThreadIds：其他邮箱里同一封邮件（最新一封）所在的会话，全部邮箱视图里打开时操作一起作用到它们
-export type Thread = { threadId: string; subject: string; messages: MessageDetail[]; copyThreadIds?: string[] };
+// copyThreadIds：其他邮箱里同一封邮件（最新一封）所在的会话，全部邮箱视图里打开时操作一起作用到它们；copiesFlagged：这些会话里有带星标的邮件
+export type Thread = { threadId: string; subject: string; messages: MessageDetail[]; copyThreadIds?: string[]; copiesFlagged?: boolean };
 
 /** 加上合并进来的副本会话（全部邮箱视图里同一封邮件收到多个邮箱时） */
 export const withCopies = (threads: Pick<ThreadSummary, 'threadId' | 'copyThreadIds'>[]) => threads.flatMap((x) => [x.threadId, ...(x.copyThreadIds ?? [])]);

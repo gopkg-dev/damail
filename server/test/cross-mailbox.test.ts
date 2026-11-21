@@ -318,6 +318,15 @@ describe('全部邮箱视图合并副本', () => {
     assert.equal(rows[0]!.threadId, homeThread);
     assert.deepEqual(rows[0]!.copyThreadIds, [workThread]);
     assert.deepEqual((await mail.getThread(ALL, homeThread))?.copyThreadIds, [workThread]);
+    assert.equal((await mail.getThread(ALL, homeThread))?.copiesFlagged, false);
+
+    // 只有另一个邮箱的副本带星标：打开的会话也要显示为已加星标，只能看 home 时看不到
+    await env.db
+      .update(env.schema.messages)
+      .set({ flagged: true })
+      .where(and(eq(env.schema.messages.threadId, workThread), eq(env.schema.messages.messageId, '<contain-1@corp.example>')));
+    assert.equal((await mail.getThread(ALL, homeThread))?.copiesFlagged, true);
+    assert.equal((await mail.getThread({ accountIds: [env.accounts.home.id] }, homeThread))?.copiesFlagged, false);
 
     // 单个邮箱里各显示各的
     const work = (await mail.listThreads({ scope: ALL, view: 'all', accountId: env.accounts.work.id, q: `subject:"${subject}"`, limit: 100 })).items;

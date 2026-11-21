@@ -445,16 +445,23 @@ export async function getThread(scope: Scope, threadId: string) {
     seen.add(key);
     return true;
   });
-  return { threadId, subject: list[0]!.m.subject, messages: await withExtras(list), copyThreadIds: await copyThreadsOf(scope, threadId) };
+  const copies = await copyThreadsOf(scope, threadId);
+  return {
+    threadId,
+    subject: list[0]!.m.subject,
+    messages: await withExtras(list),
+    copyThreadIds: copies.map((c) => c.threadId),
+    copiesFlagged: copies.some((c) => c.flagged),
+  };
 }
 
 /**
  * 并进这个会话的其他邮箱的会话：它们的最新一封也在这个会话里（和全部邮箱视图的合并规则一致），
  * 全部邮箱视图里打开时操作一起作用到它们
  */
-async function copyThreadsOf(scope: Scope, threadId: string): Promise<string[]> {
+async function copyThreadsOf(scope: Scope, threadId: string): Promise<{ threadId: string; flagged: boolean }[]> {
   const scopeCond = scope.accountIds ? (scope.accountIds.length ? sql`AND m.account_id = ANY(${sql.param(scope.accountIds)}::int[])` : sql`AND false`) : sql``;
-  const result = await db.execute<{ thread_id: string }>(sql`
+  const result = await db.execute<{ thread_id: string; flagged: boolean }>(sql`
     WITH mine AS (
       SELECT DISTINCT m.message_id, ${sameMailKey(sql`m`, sql`m.id::text`)} AS mail_key, m.account_id
       FROM messages m WHERE m.thread_id = ${threadId} AND m.message_id IS NOT NULL ${scopeCond}
@@ -467,9 +474,10 @@ async function copyThreadsOf(scope: Scope, threadId: string): Promise<string[]> 
       FROM messages m WHERE m.thread_id IN (SELECT thread_id FROM candidates) ${scopeCond}
       ORDER BY m.thread_id, m.date DESC, m.id DESC
     )
-    SELECT thread_id FROM latest WHERE mail_key IN (SELECT mail_key FROM mine)
+    SELECT l.thread_id, EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = l.thread_id AND m.flagged ${scopeCond}) AS flagged
+    FROM latest l WHERE l.mail_key IN (SELECT mail_key FROM mine)
   `);
-  return result.rows.map((r) => r.thread_id);
+  return result.rows.map((r) => ({ threadId: r.thread_id, flagged: r.flagged }));
 }
 
 /** 会话主题（第一封邮件的主题），看不到这个会话时返回 null */

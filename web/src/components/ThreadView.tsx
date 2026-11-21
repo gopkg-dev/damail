@@ -330,14 +330,15 @@ export function ThreadView({
 
   // done：成功后提示并离开这个会话（onDone）；返回是否成功
   const act = async (action: BatchAction, ids: number[], done?: string) => {
-    if (!ids.length) return false;
+    const copies = merged && COPY_ACTIONS.has(action) ? (query.data?.copyThreadIds ?? []) : [];
+    // 合并视图里本会话可能没有要改的邮件（比如只有另一个邮箱的副本带星标），这时只作用到副本
+    if (!ids.length && !copies.length) return false;
     setActing(action);
     try {
-      const copies = merged && COPY_ACTIONS.has(action) ? (query.data?.copyThreadIds ?? []) : [];
-      const [res] = await Promise.all([batchAction(ids, action), copies.length && threadBatchAction(copies, action as ThreadBatchAction)]);
+      const [res] = await Promise.all([ids.length ? batchAction(ids, action) : null, copies.length && threadBatchAction(copies, action as ThreadBatchAction)]);
       await Promise.all([qc.invalidateQueries({ queryKey: ['threads'] }), qc.invalidateQueries({ queryKey: ['thread', threadId] })]);
       if (done) {
-        message.success(res.destination ? `${done}（${res.destination}）` : done);
+        message.success(res?.destination ? `${done}（${res.destination}）` : done);
         onDone?.();
       }
       return true;
@@ -376,7 +377,7 @@ export function ThreadView({
 
   const { messages, subject } = query.data;
   const last = messages[messages.length - 1]!;
-  const starred = messages.some((m) => m.flagged);
+  const starred = messages.some((m) => m.flagged) || (merged && !!query.data?.copiesFlagged);
   const inboxIds = messages.filter(isInbox).map((m) => m.id);
   const trashIds = messages.filter((m) => m.folderSpecialUse !== '\\Trash').map((m) => m.id);
   const purgeIds = messages.filter((m) => m.folderSpecialUse === '\\Trash').map((m) => m.id);
