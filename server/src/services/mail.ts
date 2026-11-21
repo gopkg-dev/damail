@@ -154,15 +154,22 @@ export async function listThreads(opts: ListOptions): Promise<{ items: ThreadSum
   const limit = clampLimit(opts.limit);
   const cursor = decodeCursor(opts.cursor);
   const conds = buildFilters(opts);
+  // 全部邮箱视图：同一封邮件收到多个邮箱时合成一条，单个邮箱、单个文件夹里照旧各显示各的。
+  // 一个会话的最新一封也出现在另一个邮箱的会话里，就并进那个会话（比如汇总邮箱那边后来多了一封回复）；
+  // 两边互相包含（最新一封是同一封）时留邮件多的那个。被并进去的会话放进 copy_threads
+  const merge = !opts.accountId && !opts.folderId;
 
   const result = await db.execute<{
     thread_id: string;
     last_date: Date;
     latest_id: string;
     match_count: string;
+    copy_threads?: string[];
   }>(sql`
     WITH matched AS (
-      SELECT ${messages.id} AS id, ${messages.threadId} AS thread_id, ${messages.date} AS date
+      SELECT ${messages.id} AS id, ${messages.threadId} AS thread_id, ${messages.date} AS date${
+        merge ? sql`, ${messages.accountId} AS account_id, ${sameMailKey(sql`${messages}`, sql`${messages.id}::text`)} AS mail_key` : sql``
+      }
       FROM ${messages}
       JOIN ${folders} ON ${folders.id} = ${messages.folderId}
       JOIN ${accounts} ON ${accounts.id} = ${messages.accountId}
@@ -171,10 +178,35 @@ export async function listThreads(opts: ListOptions): Promise<{ items: ThreadSum
     ), grouped AS (
       SELECT thread_id, max(date) AS last_date,
              (array_agg(id ORDER BY date DESC, id DESC))[1] AS latest_id,
-             count(*) AS match_count
+             count(*) AS match_count${merge ? sql`, min(account_id) AS account_id, (array_agg(mail_key ORDER BY date DESC, id DESC))[1] AS latest_key` : sql``}
       FROM matched GROUP BY thread_id
+    )${
+      merge
+        ? sql`, contains AS (
+      -- h 包含 g 的最新一封（另一个邮箱里的同一封邮件）
+      SELECT DISTINCT g.thread_id AS absorbed, x.thread_id AS absorber
+      FROM grouped g JOIN matched x ON x.mail_key = g.latest_key AND x.account_id <> g.account_id
+    ), edges AS (
+      -- 互相包含时只留一个方向：邮件多的、再按 id 小的作为代表
+      SELECT c.absorbed, c.absorber
+      FROM contains c
+      JOIN grouped g ON g.thread_id = c.absorbed
+      JOIN grouped h ON h.thread_id = c.absorber
+      LEFT JOIN contains r ON r.absorbed = c.absorber AND r.absorber = c.absorbed
+      WHERE r.absorbed IS NULL OR h.match_count > g.match_count OR (h.match_count = g.match_count AND h.latest_id < g.latest_id)
+    ), copies AS (
+      SELECT absorber, array_agg(absorbed) AS copy_threads FROM edges GROUP BY absorber
+    ), merged AS (
+      SELECT g.thread_id, g.last_date, g.latest_id, g.match_count, coalesce(cp.copy_threads, ARRAY[]::text[]) AS copy_threads
+      FROM grouped g
+      LEFT JOIN copies cp ON cp.absorber = g.thread_id
+      LEFT JOIN (SELECT DISTINCT absorbed FROM edges) hidden ON hidden.absorbed = g.thread_id
+      WHERE hidden.absorbed IS NULL
     )
-    SELECT * FROM grouped
+    SELECT * FROM merged`
+        : sql`
+    SELECT * FROM grouped`
+    }
     ${cursor ? sql`WHERE (last_date, latest_id) < (${cursor.date}::timestamptz, ${cursor.id})` : sql``}
     ORDER BY last_date DESC, latest_id DESC
     LIMIT ${limit + 1}
@@ -188,10 +220,20 @@ export async function listThreads(opts: ListOptions): Promise<{ items: ThreadSum
   return { items, nextCursor: hasMore ? encodeCursor(new Date(last.last_date), Number(last.latest_id)) : null };
 }
 
-/** 按会话补全列表需要的字段：最后一封的内容、参与人、未读和星标汇总 */
-async function hydrateThreads(rows: { thread_id: string; last_date: Date; latest_id: string }[], scope: Scope) {
+/**
+ * 同一封邮件的判断：Message-ID、发件人（不分大小写）、主题都一致（和 AI 分析复用、日报周报去重一样）。
+ * 没有 Message-ID 的用 fallback 区分，不和别的合并
+ */
+function sameMailKey(m: SQL, fallback: SQL) {
+  return sql`CASE WHEN ${m}.message_id IS NULL THEN 'id:' || ${fallback}
+    ELSE ${m}.message_id || chr(10) || lower(coalesce(${m}.from_address, '')) || chr(10) || ${m}.subject END`;
+}
+
+/** 按会话补全列表需要的字段：最后一封的内容、参与人、未读和星标汇总；合并了副本的，未读、星标、邮箱把副本也算上 */
+async function hydrateThreads(rows: { thread_id: string; last_date: Date; latest_id: string; copy_threads?: string[] }[], scope: Scope) {
   const scopeCond = scope.accountIds ? (scope.accountIds.length ? sql`AND m2.account_id = ANY(${sql.param(scope.accountIds)}::int[])` : sql`AND false`) : sql``;
   const threadIds = rows.map((r) => r.thread_id);
+  const allThreadIds = [...threadIds, ...rows.flatMap((r) => r.copy_threads ?? [])];
   const latestIds = rows.map((r) => Number(r.latest_id));
 
   const [latest, aggregates, threadLabels] = await Promise.all([
@@ -217,7 +259,7 @@ async function hydrateThreads(rows: { thread_id: string; last_date: Date; latest
              (array_agg(DISTINCT coalesce(nullif(m2.from_name, ''), m2.from_address)))[1:4] AS participants,
              array_agg(DISTINCT m2.account_id) AS account_ids
       FROM messages m2
-      WHERE m2.thread_id = ANY(${sql.param(threadIds)}::text[]) ${scopeCond}
+      WHERE m2.thread_id = ANY(${sql.param(allThreadIds)}::text[]) ${scopeCond}
       GROUP BY m2.thread_id
     `),
     labelsForThreads(threadIds, scope),
@@ -229,6 +271,7 @@ async function hydrateThreads(rows: { thread_id: string; last_date: Date; latest
   return rows.map((r) => {
     const { m, insight } = latestById.get(Number(r.latest_id))!;
     const agg = aggByThread.get(r.thread_id);
+    const copies = (r.copy_threads ?? []).map((id) => aggByThread.get(id)).filter((a) => !!a);
     return {
       threadId: r.thread_id,
       latestMessageId: m.id,
@@ -238,10 +281,12 @@ async function hydrateThreads(rows: { thread_id: string; last_date: Date; latest
       participants: agg?.participants?.filter(Boolean) ?? [],
       lastDate: new Date(r.last_date).toISOString(),
       messageCount: Number(agg?.message_count ?? 1),
-      unread: agg?.unread ?? !m.seen,
-      flagged: agg?.flagged ?? m.flagged,
+      unread: (agg?.unread ?? !m.seen) || copies.some((c) => c.unread),
+      flagged: (agg?.flagged ?? m.flagged) || copies.some((c) => c.flagged),
       hasAttachments: agg?.has_attachments ?? m.hasAttachments,
-      accountIds: agg?.account_ids ?? [m.accountId],
+      accountIds: [...new Set([...(agg?.account_ids ?? [m.accountId]), ...copies.flatMap((c) => c.account_ids)])],
+      // 其他邮箱里同一封邮件的会话：在全部邮箱视图里对这一条的操作（已读、星标、归档、删除）也作用到它们
+      ...(r.copy_threads?.length ? { copyThreadIds: r.copy_threads } : {}),
       insight: briefInsight(insight),
       labels: threadLabels.get(r.thread_id) ?? [],
     };
@@ -400,7 +445,39 @@ export async function getThread(scope: Scope, threadId: string) {
     seen.add(key);
     return true;
   });
-  return { threadId, subject: list[0]!.m.subject, messages: await withExtras(list) };
+  const copies = await copyThreadsOf(scope, threadId);
+  return {
+    threadId,
+    subject: list[0]!.m.subject,
+    messages: await withExtras(list),
+    copyThreadIds: copies.map((c) => c.threadId),
+    copiesFlagged: copies.some((c) => c.flagged),
+  };
+}
+
+/**
+ * 并进这个会话的其他邮箱的会话：它们的最新一封也在这个会话里（和全部邮箱视图的合并规则一致），
+ * 全部邮箱视图里打开时操作一起作用到它们
+ */
+async function copyThreadsOf(scope: Scope, threadId: string): Promise<{ threadId: string; flagged: boolean }[]> {
+  const scopeCond = scope.accountIds ? (scope.accountIds.length ? sql`AND m.account_id = ANY(${sql.param(scope.accountIds)}::int[])` : sql`AND false`) : sql``;
+  const result = await db.execute<{ thread_id: string; flagged: boolean }>(sql`
+    WITH mine AS (
+      SELECT DISTINCT m.message_id, ${sameMailKey(sql`m`, sql`m.id::text`)} AS mail_key, m.account_id
+      FROM messages m WHERE m.thread_id = ${threadId} AND m.message_id IS NOT NULL ${scopeCond}
+    ), candidates AS (
+      SELECT DISTINCT m.thread_id FROM messages m
+      WHERE m.message_id IN (SELECT message_id FROM mine) AND m.thread_id <> ${threadId}
+        AND m.account_id NOT IN (SELECT account_id FROM mine) ${scopeCond}
+    ), latest AS (
+      SELECT DISTINCT ON (m.thread_id) m.thread_id, ${sameMailKey(sql`m`, sql`m.id::text`)} AS mail_key
+      FROM messages m WHERE m.thread_id IN (SELECT thread_id FROM candidates) ${scopeCond}
+      ORDER BY m.thread_id, m.date DESC, m.id DESC
+    )
+    SELECT l.thread_id, EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = l.thread_id AND m.flagged ${scopeCond}) AS flagged
+    FROM latest l WHERE l.mail_key IN (SELECT mail_key FROM mine)
+  `);
+  return result.rows.map((r) => ({ threadId: r.thread_id, flagged: r.flagged }));
 }
 
 /** 会话主题（第一封邮件的主题），看不到这个会话时返回 null */

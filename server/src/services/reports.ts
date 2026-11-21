@@ -89,21 +89,28 @@ export const rows = async <T extends Row>(q: ReturnType<typeof sql>) => (await d
 
 /**
  * 收到的邮件：排除已发送 / 草稿 / 垃圾箱和自己发的，同一封在多个文件夹（Gmail 标签）里只算一次，优先取收件箱里的那份。
- * skipIgnored 时再排除忽略名单里的发件人（日报用；统计页看的是全部来信）
+ * skipIgnored 时再排除忽略名单里的发件人（日报用；统计页看的是全部来信）。
+ * acrossAccounts 时同一封邮件收到多个邮箱也只算一次（Message-ID、发件人、主题都一致），优先取收件箱里、已分析过的那份；
+ * 任何一份回复过就算已回复
  */
-export function receivedCte(start: Date, until: Date, opts: { skipIgnored?: boolean } = {}) {
+export function receivedCte(start: Date, until: Date, opts: { skipIgnored?: boolean; acrossAccounts?: boolean } = {}) {
+  // 同一封邮件：Message-ID、发件人、主题都一致，免得伪造的 Message-ID 把别的邮件吞掉
+  const sameMail = sql`coalesce(m.message_id, m.id::text), lower(coalesce(m.from_address, '')), m.subject`;
+  const key = opts.acrossAccounts ? sameMail : sql`m.account_id, ${sameMail}`;
   return sql`
     own AS (SELECT lower(email) AS e FROM accounts),
     recv AS (
-      SELECT DISTINCT ON (m.account_id, coalesce(m.message_id, m.id::text))
-             m.id, m.account_id, m.thread_id, m.subject, m.from_name, m.from_address, m.date, m.answered,
+      SELECT DISTINCT ON (${key})
+             m.id, m.account_id, m.thread_id, m.subject, m.from_name, m.from_address, m.date,
+             bool_or(m.answered) OVER (PARTITION BY ${key}) AS answered,
              (f.special_use = '\\Inbox' OR upper(f.path) = 'INBOX') AS in_inbox
       FROM messages m JOIN folders f ON f.id = m.folder_id
       WHERE m.date >= ${start.toISOString()}::timestamptz AND m.date < ${until.toISOString()}::timestamptz
         AND coalesce(f.special_use, '') NOT IN ('\\Sent', '\\Drafts', '\\Junk')
         AND lower(coalesce(m.from_address, '')) NOT IN (SELECT e FROM own)
         ${opts.skipIgnored ? sql`AND NOT ${isIgnoredSql(sql`m.from_address`)}` : sql``}
-      ORDER BY m.account_id, coalesce(m.message_id, m.id::text), (f.special_use = '\\Inbox' OR upper(f.path) = 'INBOX') DESC, m.id
+      ORDER BY ${key}, (f.special_use = '\\Inbox' OR upper(f.path) = 'INBOX') DESC,
+               EXISTS (SELECT 1 FROM message_insights i WHERE i.message_id = m.id) DESC, m.id
     )`;
 }
 
@@ -142,7 +149,9 @@ const toItem = (r: ItemRow): ReportItem => ({
 });
 
 export async function collectReportData(start: Date, until: Date, prevStart: Date): Promise<ReportData> {
-  const recv = receivedCte(start, until, { skipIgnored: true });
+  // 总数、分类、重要、待回复等按邮件算，同一封收到多个邮箱只算一次；按邮箱的统计里每个邮箱各算各的
+  const recv = receivedCte(start, until, { skipIgnored: true, acrossAccounts: true });
+  const recvPerAccount = receivedCte(start, until, { skipIgnored: true });
   const [totals] = await rows<{ received: string; analyzed: string; verification: string }>(sql`
     WITH ${recv}
     SELECT count(*) AS received,
@@ -150,13 +159,15 @@ export async function collectReportData(start: Date, until: Date, prevStart: Dat
            count(*) FILTER (WHERE i.category = 'verification' OR jsonb_array_length(coalesce(i.extracted->'codes', '[]'::jsonb)) > 0) AS verification
     FROM recv LEFT JOIN message_insights i ON i.message_id = recv.id`);
 
-  const [prev] = await rows<{ n: string }>(sql`WITH ${receivedCte(prevStart, start, { skipIgnored: true })} SELECT count(*) AS n FROM recv`);
+  const [prev] = await rows<{ n: string }>(
+    sql`WITH ${receivedCte(prevStart, start, { skipIgnored: true, acrossAccounts: true })} SELECT count(*) AS n FROM recv`,
+  );
 
   const sentByAccount = await rows<{ account_id: number; n: string }>(sql`
     WITH ${sentCte(start, until)} SELECT account_id, count(*) AS n FROM sent GROUP BY account_id`);
 
   const byAccountRows = await rows<{ id: number; name: string; email: string; received: string }>(sql`
-    WITH ${recv}
+    WITH ${recvPerAccount}
     SELECT a.id, a.name, a.email, count(recv.id) AS received
     FROM accounts a LEFT JOIN recv ON recv.account_id = a.id
     GROUP BY a.id ORDER BY count(recv.id) DESC, a.id`);

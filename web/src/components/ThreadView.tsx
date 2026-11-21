@@ -18,7 +18,18 @@ import {
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Alert, App, Button, Card, Empty, Flex, Spin, Tag, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
-import { api, attachmentUrl, batchAction, type BatchAction, type ComposeMode, type DraftSummary, type MessageDetail, type Thread } from '../api';
+import {
+  api,
+  attachmentUrl,
+  batchAction,
+  threadBatchAction,
+  type BatchAction,
+  type ComposeMode,
+  type DraftSummary,
+  type MessageDetail,
+  type Thread,
+  type ThreadBatchAction,
+} from '../api';
 import { t } from '../i18n';
 import { folderLabel, formatAddress, formatSize, fromNow, fullDate, shortDate } from '../lib/format';
 import { FileIcon } from '../lib/fileIcon';
@@ -273,7 +284,23 @@ function ThreadDrafts({ threadId }: { threadId: string }) {
   );
 }
 
-export function ThreadView({ threadId, inTrash, onBack, onDone }: { threadId: string; inTrash?: boolean; onBack?: () => void; onDone?: () => void }) {
+/** 阅读区的整会话操作，在全部邮箱视图里同样作用到其他邮箱里同一封邮件的会话 */
+const COPY_ACTIONS = new Set<BatchAction>(['read', 'unread', 'star', 'unstar', 'archive', 'trash', 'delete']);
+
+export function ThreadView({
+  threadId,
+  inTrash,
+  merged,
+  onBack,
+  onDone,
+}: {
+  threadId: string;
+  inTrash?: boolean;
+  // 全部邮箱视图：列表里同一封邮件的几个邮箱副本合成了一条
+  merged?: boolean;
+  onBack?: () => void;
+  onDone?: () => void;
+}) {
   const { token } = theme.useToken();
   const { message, modal } = App.useApp();
   const qc = useQueryClient();
@@ -294,21 +321,24 @@ export function ThreadView({ threadId, inTrash, onBack, onDone }: { threadId: st
     const unread = (query.data?.messages ?? []).filter((m) => !m.seen).map((m) => m.id);
     if (markedRead.current || !query.data) return;
     markedRead.current = true;
-    if (!unread.length) return;
-    batchAction(unread, 'read')
+    const copies = merged ? (query.data.copyThreadIds ?? []) : [];
+    if (!unread.length && !copies.length) return;
+    Promise.all([unread.length && batchAction(unread, 'read'), copies.length && threadBatchAction(copies, 'read')])
       .then(() => qc.invalidateQueries({ queryKey: ['threads'] }))
       .catch((e: Error) => message.warning(t.reader.markReadFailed(e.message)));
-  }, [query.data, qc, message]);
+  }, [query.data, qc, message, merged]);
 
   // done：成功后提示并离开这个会话（onDone）；返回是否成功
   const act = async (action: BatchAction, ids: number[], done?: string) => {
-    if (!ids.length) return false;
+    const copies = merged && COPY_ACTIONS.has(action) ? (query.data?.copyThreadIds ?? []) : [];
+    // 合并视图里本会话可能没有要改的邮件（比如只有另一个邮箱的副本带星标），这时只作用到副本
+    if (!ids.length && !copies.length) return false;
     setActing(action);
     try {
-      const res = await batchAction(ids, action);
+      const [res] = await Promise.all([ids.length ? batchAction(ids, action) : null, copies.length && threadBatchAction(copies, action as ThreadBatchAction)]);
       await Promise.all([qc.invalidateQueries({ queryKey: ['threads'] }), qc.invalidateQueries({ queryKey: ['thread', threadId] })]);
       if (done) {
-        message.success(res.destination ? `${done}（${res.destination}）` : done);
+        message.success(res?.destination ? `${done}（${res.destination}）` : done);
         onDone?.();
       }
       return true;
@@ -347,7 +377,7 @@ export function ThreadView({ threadId, inTrash, onBack, onDone }: { threadId: st
 
   const { messages, subject } = query.data;
   const last = messages[messages.length - 1]!;
-  const starred = messages.some((m) => m.flagged);
+  const starred = messages.some((m) => m.flagged) || (merged && !!query.data?.copiesFlagged);
   const inboxIds = messages.filter(isInbox).map((m) => m.id);
   const trashIds = messages.filter((m) => m.folderSpecialUse !== '\\Trash').map((m) => m.id);
   const purgeIds = messages.filter((m) => m.folderSpecialUse === '\\Trash').map((m) => m.id);

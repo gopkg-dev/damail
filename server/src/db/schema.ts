@@ -239,6 +239,10 @@ export const messages = pgTable(
     index('messages_date').on(t.date.desc()),
     index('messages_thread').on(t.threadId),
     index('messages_message_id').on(t.accountId, t.messageId),
+    // 同一封邮件收到多个邮箱时按 Message-ID 找其他邮箱里的副本（复用 AI 分析、报告去重）
+    index('messages_message_id_global')
+      .on(t.messageId)
+      .where(sql`${t.messageId} IS NOT NULL`),
     index('messages_remote_id').on(t.accountId, t.remoteId),
     index('messages_references').using('gin', t.references),
     index('messages_search_trgm').using('gin', sql`${t.searchText} gin_trgm_ops`),

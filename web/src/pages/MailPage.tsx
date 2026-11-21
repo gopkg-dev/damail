@@ -33,6 +33,8 @@ export function MailPage() {
 
   const folder = folderId ? folders.data?.find((x) => String(x.id) === folderId) : undefined;
   const inTrash = folder?.specialUse === '\\Trash';
+  // 全部邮箱视图：同一封邮件收到多个邮箱时列表里合成一条（和服务端 listThreads 的判断一致）
+  const merged = !accountId && !folderId && !aiMode;
 
   let title = t.mail.views[view] ?? t.mail.mail;
   if (accountId) title = accounts.data?.find((a) => String(a.id) === accountId)?.name ?? t.mail.account;
@@ -120,7 +122,14 @@ export function MailPage() {
       {narrow ? (
         <div style={{ flex: 1, minHeight: 0 }}>
           {selected ? (
-            <ThreadView key={selected} threadId={selected} inTrash={inTrash} onBack={() => setParam('thread', null)} onDone={() => setParam('thread', null)} />
+            <ThreadView
+              key={selected}
+              threadId={selected}
+              inTrash={inTrash}
+              merged={merged}
+              onBack={() => setParam('thread', null)}
+              onDone={() => setParam('thread', null)}
+            />
           ) : (
             threadList
           )}
@@ -132,7 +141,7 @@ export function MailPage() {
           </Splitter.Panel>
           <Splitter.Panel min={360}>
             {selected ? (
-              <ThreadView key={selected} threadId={selected} inTrash={inTrash} onDone={() => setParam('thread', null)} />
+              <ThreadView key={selected} threadId={selected} inTrash={inTrash} merged={merged} onDone={() => setParam('thread', null)} />
             ) : (
               <Flex align="center" justify="center" style={{ height: '100%' }}>
                 <Empty description={t.mail.selectToRead} />
