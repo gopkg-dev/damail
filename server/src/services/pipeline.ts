@@ -28,10 +28,12 @@ import { allLabelIds, applyAiLabels, messageLabelIds, promptLabels } from './lab
 
 const ALL = { accountIds: null };
 
-function messageNotice(m: Message, insight: MessageInsight | null, event: EventName): Notice {
+/** mailbox 是收到这封邮件的邮箱地址：接了多个邮箱时，靠它分辨是哪个邮箱收到的 */
+function messageNotice(m: Message, insight: MessageInsight | null, event: EventName, mailbox: string | undefined): Notice {
   const from = m.fromName || m.fromAddress || L('未知发件人', 'Unknown sender');
   const code = insight?.extracted.codes[0];
   const lines = [insight?.summary || m.snippet];
+  if (mailbox) lines.unshift(L(`收件邮箱：${mailbox}`, `Mailbox: ${mailbox}`));
   if (code) lines.unshift(L(`验证码：${code}`, `Code: ${code}`));
   if (insight?.extracted.dueDate) lines.push(L(`截止：${insight.extracted.dueDate}`, `Due: ${insight.extracted.dueDate}`));
   return {
@@ -47,6 +49,7 @@ function messageNotice(m: Message, insight: MessageInsight | null, event: EventN
       messageId: m.id,
       threadId: m.threadId,
       accountId: m.accountId,
+      mailbox,
       from: { name: m.fromName, address: m.fromAddress },
       subject: m.subject,
       date: m.date.toISOString(),
@@ -150,7 +153,7 @@ async function serialized<T>(key: string | null, fn: () => Promise<T>): Promise<
 }
 
 /** 规则动作：先执行不改变位置的动作，最后再移动，避免邮件被移走后后续动作找不到它 */
-async function runActions(rule: Rule, m: Message, insight: MessageInsight | null, notified: Set<number>) {
+async function runActions(rule: Rule, m: Message, insight: MessageInsight | null, notified: Set<number>, mailbox: string | undefined) {
   const done: string[] = [];
   const auth: AuthContext = { kind: 'session', userId: 0, scopes: [], scope: ALL, actor: `rule:${rule.id}` };
   const ordered = [...rule.actions].sort(
@@ -168,7 +171,7 @@ async function runActions(rule: Rule, m: Message, insight: MessageInsight | null
         case 'notify':
           if (a.channelId && !notified.has(a.channelId)) {
             notified.add(a.channelId);
-            const notice = messageNotice(m, insight, 'message.received');
+            const notice = messageNotice(m, insight, 'message.received', mailbox);
             await notifyChannel(a.channelId, { ...notice, event: 'rule.matched', data: { ...notice.data, rule: { id: rule.id, name: rule.name } } });
           }
           break;
@@ -271,10 +274,15 @@ async function processMessage(m: Message, payload: Record<string, unknown>, last
   const notified = new Set<number>(await notifiedForCopies(copies));
   const already = new Set(notified);
   const matched: string[] = [];
-  const [labelIds, knownLabels] = await Promise.all([messageLabelIds(m.id), allLabelIds()]);
+  const [labelIds, knownLabels, acc] = await Promise.all([
+    messageLabelIds(m.id),
+    allLabelIds(),
+    db.query.accounts.findFirst({ columns: { email: true }, where: eq(accounts.id, m.accountId) }),
+  ]);
+  const mailbox = acc?.email;
   for (const rule of (await listRules()).filter((r) => r.enabled)) {
     if (!ruleMatches(rule, { message: m, insight, labelIds, knownLabels })) continue;
-    const actions = await runActions(rule, m, insight, notified);
+    const actions = await runActions(rule, m, insight, notified, mailbox);
     matched.push(`${rule.name}: ${actions.join(', ')}`);
     await db
       .update(rules)
@@ -297,7 +305,7 @@ async function processMessage(m: Message, payload: Record<string, unknown>, last
     if (notified.has(ch.id)) continue;
     const event = events.find((e) => ch.events.includes(e))!;
     notified.add(ch.id);
-    await notifyChannel(ch.id, messageNotice(m, insight, event));
+    await notifyChannel(ch.id, messageNotice(m, insight, event, mailbox));
   }
   const sent = [...notified].filter((id) => !already.has(id));
   if (sent.length) {
