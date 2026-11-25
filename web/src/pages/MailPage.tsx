@@ -33,6 +33,8 @@ export function MailPage() {
 
   const folder = folderId ? folders.data?.find((x) => String(x.id) === folderId) : undefined;
   const inTrash = folder?.specialUse === '\\Trash';
+  // 某个邮箱的垃圾邮件文件夹，或所有邮箱的垃圾邮件视图：列表上的「归档」换成「移回收件箱」
+  const inJunk = folder ? folder.specialUse === '\\Junk' : !accountId && view === 'junk';
   // 全部邮箱视图：同一封邮件收到多个邮箱时列表里合成一条（和服务端 listThreads 的判断一致）
   const merged = !accountId && !folderId && !aiMode;
 
@@ -82,6 +84,7 @@ export function MailPage() {
       accountId={accountId}
       folderId={folderId}
       inTrash={inTrash}
+      inJunk={inJunk}
       q={q}
       selected={selected}
       onSelect={(id) => setParam('thread', id)}

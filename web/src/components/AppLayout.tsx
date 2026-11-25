@@ -311,6 +311,8 @@ function Shell({ username }: { username: string }) {
     (f) => f.syncEnabled && f.path.toUpperCase() !== 'INBOX' && !['\\Inbox', '\\Sent', '\\Drafts', '\\Trash', '\\Junk'].includes(f.specialUse ?? ''),
   );
 
+  const hasJunk = (folders.data ?? []).some((f) => f.syncEnabled && f.specialUse === '\\Junk');
+
   const selectedKey = useMemo(() => {
     if (location.pathname.startsWith('/settings') || location.pathname.startsWith('/ai/')) return location.pathname;
     if (location.pathname === '/outbox') return `/outbox?tab=${params.get('tab') ?? defaultDraftTab(pendingCount)}`;
@@ -438,6 +440,8 @@ function Shell({ username }: { username: string }) {
         { key: 'view:starred', icon: <StarOutlined />, label: row(t.layout.mail.starred, count(st?.starredTotal ?? 0)) },
         { key: 'view:sent', icon: <SendOutlined />, label: row(t.layout.mail.sent, count(st?.sentTotal ?? 0)) },
         ...(hasExtraFolders ? [{ key: 'view:all', icon: <MailOutlined />, label: row(t.layout.mail.all, count(st?.allTotal ?? 0)) }] : []),
+        // 所有邮箱的垃圾邮件：「全部邮件」等视图不含垃圾邮件，误判进去的邮件在这里集中看
+        ...(hasJunk ? [{ key: 'view:junk', icon: <WarningOutlined />, label: row(t.layout.mail.junk, count(st?.junkTotal ?? 0)) }] : []),
         // AI 分类，默认收起，展开状态和邮箱一起记在本地
         {
           key: 'cats',
@@ -558,6 +562,7 @@ function Shell({ username }: { username: string }) {
     importantUnread,
     followUpsDue,
     hasExtraFolders,
+    hasJunk,
     labels.data,
     openKeys,
     selectedKey,
@@ -608,7 +613,7 @@ function Shell({ username }: { username: string }) {
     if (!url || !value) return null;
     const st = stats.data;
     if (kind === 'view') {
-      if (value === 'sent' || value === 'waiting') return null;
+      if (value === 'sent' || value === 'waiting' || value === 'junk') return null;
       const unread: Record<string, number | undefined> = { inbox: totalUnread, important: importantUnread, unread: st?.unreadTotal };
       const name = t.layout.mail[value as 'inbox' | 'important' | 'unread' | 'starred' | 'all'];
       return { name, url, unreadFilter: value !== 'unread', markRead: { body: { view: value }, unread: unread[value] } };

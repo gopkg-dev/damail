@@ -19,6 +19,7 @@ export type Stats = {
   unreadTotal: number;
   starredTotal: number;
   sentTotal: number;
+  junkTotal: number;
   allTotal: number;
   waitingTotal: number;
   draftsTotal: number;

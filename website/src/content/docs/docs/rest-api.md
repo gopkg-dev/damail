@@ -13,7 +13,7 @@ Message details, attachments and raw `.eml` downloads fetch and cache the comple
 |---|---|---|
 | GET | `/api/v1/accounts` | Mailboxes, status and unread counts |
 | GET | `/api/v1/folders?account=` | Folders |
-| GET | `/api/v1/threads?view=&account=&folder=&q=&cursor=` | Threads; `view` is `inbox` `important` `unread` `starred` `sent` `all` |
+| GET | `/api/v1/threads?view=&account=&folder=&q=&cursor=` | Threads; `view` is `inbox` `important` `unread` `starred` `sent` `junk` `all` |
 | GET | `/api/v1/threads/:threadId` | Thread detail |
 | GET | `/api/v1/messages?q=&account=&cursor=&limit=` | Flat message search |
 | GET | `/api/v1/messages/:id?format=text` | Message detail |

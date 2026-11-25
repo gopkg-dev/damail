@@ -270,6 +270,9 @@ async function processMessage(m: Message, payload: Record<string, unknown>, last
   }
   if (payload.analyzeOnly) return result;
 
+  // 垃圾邮件里的新邮件只为了不漏掉验证码：不执行规则，也只推送验证码，免得垃圾邮件触发动作、刷屏
+  const junk = await inJunk(m.folderId);
+
   // 2. 规则：移动、标记这些动作每个邮箱的副本各自执行；推送按渠道去重，同一封邮件只推一次
   const notified = new Set<number>(await notifiedForCopies(copies));
   const already = new Set(notified);
@@ -280,7 +283,7 @@ async function processMessage(m: Message, payload: Record<string, unknown>, last
     db.query.accounts.findFirst({ columns: { email: true }, where: eq(accounts.id, m.accountId) }),
   ]);
   const mailbox = acc?.email;
-  for (const rule of (await listRules()).filter((r) => r.enabled)) {
+  for (const rule of junk ? [] : (await listRules()).filter((r) => r.enabled)) {
     if (!ruleMatches(rule, { message: m, insight, labelIds, knownLabels })) continue;
     const actions = await runActions(rule, m, insight, notified, mailbox);
     matched.push(`${rule.name}: ${actions.join(', ')}`);
@@ -294,13 +297,15 @@ async function processMessage(m: Message, payload: Record<string, unknown>, last
   if (matched.length) result.rules = matched;
 
   // 3. 订阅了事件的渠道：每个渠道只推送一次，取最具体的事件
-  const events: EventName[] = ['message.received'];
-  if (insight?.priority === 'high') events.unshift('message.important');
+  const events: EventName[] = junk ? [] : ['message.received'];
+  if (!junk && insight?.priority === 'high') events.unshift('message.important');
   if (insight?.extracted.codes.length) events.unshift('message.verification');
-  const subscribed = await db
-    .select({ id: channels.id, events: channels.events })
-    .from(channels)
-    .where(and(eq(channels.enabled, true), arrayOverlaps(channels.events, events)));
+  const subscribed = events.length
+    ? await db
+        .select({ id: channels.id, events: channels.events })
+        .from(channels)
+        .where(and(eq(channels.enabled, true), arrayOverlaps(channels.events, events)))
+    : [];
   for (const ch of subscribed) {
     if (notified.has(ch.id)) continue;
     const event = events.find((e) => ch.events.includes(e))!;
@@ -318,7 +323,12 @@ async function processMessage(m: Message, payload: Record<string, unknown>, last
   return result;
 }
 
-/** 同步到新邮件时调用：只处理收件箱里的、近期的邮件（首次回溯和移回收件箱的旧邮件不触发） */
+async function inJunk(folderId: number) {
+  const f = await db.query.folders.findFirst({ columns: { specialUse: true }, where: eq(folders.id, folderId) });
+  return f?.specialUse === '\\Junk';
+}
+
+/** 同步到新邮件时调用：只处理收件箱和垃圾邮件里的、近期的邮件（首次回溯和移回收件箱的旧邮件不触发） */
 export async function onNewMessage(messageId: number, date: Date) {
   if (Date.now() - date.getTime() > 3 * 86400_000) return;
   await enqueue('process_message', { messageId });

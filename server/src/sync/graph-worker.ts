@@ -1,4 +1,4 @@
-import { and, eq, isNull, notInArray, or } from 'drizzle-orm';
+import { and, eq, inArray, isNull, notInArray, or } from 'drizzle-orm';
 import { config, pollIntervalMsOf } from '../config.js';
 import { db } from '../db/index.js';
 import { accounts, folders, messages, type Account, type Folder } from '../db/schema.js';
@@ -11,8 +11,10 @@ import { isDefaultSynced, nextUid, StatusReporter } from './status.js';
 import { isMessageDataError } from '../lib/db-errors.js';
 
 const TRUNCATED_BYTES = 2 * 1024 * 1024;
-// Graph 没有 IDLE，收件箱靠轮询；其他文件夹按 pollInterval
+// Graph 没有 IDLE，收件箱和垃圾邮件靠轮询（验证码常被误判进垃圾邮件，不能等 pollInterval）；其他文件夹按 pollInterval
 const INBOX_POLL_MS = 60_000;
+// 和收件箱一起高频同步、新邮件进自动化流程的文件夹
+const HOT_FOLDERS = ['\\Inbox', '\\Junk'];
 
 const WELL_KNOWN: Record<string, string> = {
   inbox: '\\Inbox',
@@ -45,7 +47,7 @@ function graphFlags(item: DeltaItem, answered = false) {
  * 微软 Graph 账户的同步 worker，对外接口和 IMAP 的 AccountWorker 一致：
  * - 文件夹用 mailFolders 列出，按 wellKnownName 识别收件箱、已发送等
  * - 每个文件夹用 messages/delta 增量同步：新邮件取原始 MIME 走同一套入库流程，已读/旗标变化和删除直接改本地
- * - 收件箱每分钟轮询一次，其他文件夹按 pollInterval
+ * - 收件箱和垃圾邮件每分钟轮询一次，其他文件夹按 pollInterval
  */
 export class GraphWorker {
   private abort = new AbortController();
@@ -125,11 +127,15 @@ export class GraphWorker {
     }
   }
 
+  /** 收件箱和垃圾邮件 */
   private async syncInbox(account: Account) {
-    const inbox = await db.query.folders.findFirst({
-      where: and(eq(folders.accountId, this.accountId), eq(folders.specialUse, '\\Inbox')),
+    const list = await db.query.folders.findMany({
+      where: and(eq(folders.accountId, this.accountId), inArray(folders.specialUse, HOT_FOLDERS)),
     });
-    if (inbox?.syncEnabled && inbox.remoteId) await this.syncFolder(account, inbox);
+    for (const f of list.sort((a, b) => HOT_FOLDERS.indexOf(a.specialUse!) - HOT_FOLDERS.indexOf(b.specialUse!))) {
+      if (this.abort.signal.aborted) return;
+      if (f.syncEnabled && f.remoteId) await this.syncFolder(account, f);
+    }
   }
 
   private async refreshFolders(account: Account): Promise<Folder[]> {
@@ -194,8 +200,8 @@ export class GraphWorker {
   private async syncFolder(account: Account, folder: Folder) {
     if (!folder.remoteId) return;
     const initial = !folder.deltaLink;
-    // 只有收件箱的增量新邮件进入自动化流程；首次回溯不触发
-    const automate = folder.specialUse === '\\Inbox' && !initial;
+    // 只有收件箱和垃圾邮件的增量新邮件进入自动化流程；首次回溯不触发
+    const automate = HOT_FOLDERS.includes(folder.specialUse ?? '') && !initial;
     let url: string | undefined = folder.deltaLink ?? this.initialDeltaUrl(folder);
     let deltaLink: string | undefined;
     let added = 0;

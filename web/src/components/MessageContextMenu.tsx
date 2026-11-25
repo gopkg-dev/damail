@@ -1,6 +1,7 @@
 import {
   ColumnHeightOutlined,
   ContainerOutlined,
+  InboxOutlined,
   CopyOutlined,
   DeleteOutlined,
   DownloadOutlined,
@@ -83,6 +84,7 @@ export function MessageContextMenu({
     { key: 'raw', label: t.reader.downloadEml, icon: <DownloadOutlined /> },
     { type: 'divider' },
     ...(isInbox(m) ? [{ key: 'archive', label: t.reader.archive, icon: <ContainerOutlined /> }] : []),
+    ...(m.folderSpecialUse === '\\Junk' ? [{ key: 'inbox', label: t.reader.moveToInbox, icon: <InboxOutlined /> }] : []),
     trashed || inTrash
       ? { key: 'delete', label: t.reader.deleteForever, icon: <DeleteOutlined />, danger: true }
       : { key: 'trash', label: t.threads.ctx.trashOne, icon: <DeleteOutlined /> },
@@ -93,7 +95,7 @@ export function MessageContextMenu({
     if (await act(action, [m.id])) message.success(done);
   };
   // 归档 / 删除：会话只剩这一封时和顶栏按钮一样离开会话
-  const remove = async (action: 'archive' | 'trash', done: string) => {
+  const remove = async (action: 'archive' | 'inbox' | 'trash', done: string) => {
     if (count === 1) await act(action, [m.id], done);
     else await quiet(action, done);
   };
@@ -106,6 +108,7 @@ export function MessageContextMenu({
     if (key === 'unstar') return void quiet('unstar', t.reader.ctx.unstarred);
     if (key === 'expandAll' || key === 'collapseAll') return onExpandAll(key === 'expandAll');
     if (key === 'archive') return void remove('archive', t.reader.archived);
+    if (key === 'inbox') return void remove('inbox', t.reader.movedToInbox);
     if (key === 'trash') return void remove('trash', t.reader.trashed);
     if (key === 'delete') return onPurge(m);
     if (key === 'raw') {

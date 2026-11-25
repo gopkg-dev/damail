@@ -31,7 +31,7 @@ description: 各家邮箱的授权方式，以及 Gmail / Outlook 的 OAuth2 配
 4. 「API 权限」添加 Microsoft Graph 委托权限：`offline_access` `Mail.ReadWrite` `Mail.Send` `User.Read`
 5. 在 DaMail「设置 → 授权应用」填入 Client ID 和密码，然后添加邮箱时选 Outlook，点「登录并授权」
 
-微软邮箱通过 Graph API 收发信（部分个人账号 IMAP 能登录却打不开邮箱），新邮件每分钟检查一次；单封邮件含附件不能超过 4MB。
+微软邮箱通过 Graph API 收发信（部分个人账号 IMAP 能登录却打不开邮箱），收件箱和垃圾邮件每分钟检查一次新邮件；单封邮件含附件不能超过 4MB。
 
 ## Gmail / Google Workspace（OAuth2）
 
@@ -47,7 +47,7 @@ description: 各家邮箱的授权方式，以及 Gmail / Outlook 的 OAuth2 配
 
 ## 同步行为
 
-- 收件箱通过 IMAP IDLE 实时推送，新邮件 1 秒内入库；其他文件夹按轮询间隔检查
+- 收件箱通过 IMAP IDLE 实时推送，新邮件 1 秒内入库；垃圾邮件每分钟检查一次（验证码常被误判进去）；其他文件夹按轮询间隔检查
 - 已读、星标、删除会从服务器同步回来；在 DaMail 里的已读、星标、归档、删除、移动也会写回服务器
 - 删除只移到「已删除」，不会永久删除
 - 断线后按指数退避自动重连

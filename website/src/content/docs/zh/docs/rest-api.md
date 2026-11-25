@@ -13,7 +13,7 @@ description: REST API、收信规则格式和 Webhook
 |---|---|---|
 | GET | `/api/v1/accounts` | 邮箱列表、状态、未读数 |
 | GET | `/api/v1/folders?account=` | 文件夹 |
-| GET | `/api/v1/threads?view=&account=&folder=&q=&cursor=` | 会话列表，`view` 为 `inbox` `important` `unread` `starred` `sent` `all` |
+| GET | `/api/v1/threads?view=&account=&folder=&q=&cursor=` | 会话列表，`view` 为 `inbox` `important` `unread` `starred` `sent` `junk` `all` |
 | GET | `/api/v1/threads/:threadId` | 会话详情 |
 | GET | `/api/v1/messages?q=&account=&cursor=&limit=` | 扁平邮件搜索 |
 | GET | `/api/v1/messages/:id?format=text` | 邮件详情 |

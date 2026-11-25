@@ -2,6 +2,7 @@ import {
   BellOutlined,
   CheckOutlined,
   ContainerOutlined,
+  InboxOutlined,
   CopyOutlined,
   DeleteOutlined,
   EyeInvisibleOutlined,
@@ -38,12 +39,14 @@ const FOLLOW_UP_PRESETS = ['1', '3', '7'] as const;
 export function ThreadContextMenu({
   target,
   inTrash,
+  inJunk,
   onClose,
   onOpen,
   runBatch,
 }: {
   target: ThreadMenuTarget | null;
   inTrash?: boolean;
+  inJunk?: boolean;
   onClose: () => void;
   onOpen: (threadId: string) => void;
   runBatch: (action: ThreadBatchAction, threadIds: string[]) => void;
@@ -123,7 +126,9 @@ export function ThreadContextMenu({
         ]
       : []),
     { type: 'divider' },
-    { key: 'archive', label: t.threads.archive, icon: <ContainerOutlined /> },
+    inJunk
+      ? { key: 'inbox', label: t.threads.moveToInbox, icon: <InboxOutlined /> }
+      : { key: 'archive', label: t.threads.archive, icon: <ContainerOutlined /> },
     inTrash
       ? { key: 'delete', label: t.threads.deleteForever, icon: <DeleteOutlined />, danger: true }
       : { key: 'trash', label: t.threads.ctx.trashOne, icon: <DeleteOutlined /> },
@@ -166,7 +171,7 @@ export function ThreadContextMenu({
   const onClick = (key: string) => {
     if (key === 'open') return onOpen(one.threadId);
     if (key === 'reply' || key === 'replyAll' || key === 'forward') return compose({ mode: key, sourceMessageId: one.latestMessageId });
-    if (['read', 'unread', 'star', 'unstar', 'archive', 'trash', 'delete'].includes(key)) return runBatch(key as ThreadBatchAction, ids);
+    if (['read', 'unread', 'star', 'unstar', 'archive', 'inbox', 'trash', 'delete'].includes(key)) return runBatch(key as ThreadBatchAction, ids);
     if (key === 'labels:manage') return navigate('/ai/labels');
     if (key.startsWith('label:')) return void setLabel(Number(key.slice(6)));
     if (key.startsWith('fu:')) return void followUp(key.slice(3));

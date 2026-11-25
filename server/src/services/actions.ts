@@ -267,11 +267,11 @@ export async function deleteMessages(scope: Scope, ids: number[]) {
   return { deleted };
 }
 
-export type ThreadAction = 'read' | 'unread' | 'star' | 'unstar' | 'archive' | 'trash' | 'delete';
+export type ThreadAction = 'read' | 'unread' | 'star' | 'unstar' | 'archive' | 'inbox' | 'trash' | 'delete';
 
 /**
  * 按会话批量操作时，每个会话里实际要处理的邮件，和会话详情页按钮的语义一致：
- * 已读处理所有未读；标未读、加星标只处理最新一封；归档只移收件箱里的；删除跳过已在废纸篓的；彻底删除只删废纸篓里的。
+ * 已读处理所有未读；标未读、加星标只处理最新一封；归档只移收件箱里的；移回收件箱只移垃圾邮件里的；删除跳过已在废纸篓的；彻底删除只删废纸篓里的。
  */
 export async function threadMessageIds(scope: Scope, threadIds: string[], action: ThreadAction): Promise<number[]> {
   if (!threadIds.length) return [];
@@ -317,6 +317,9 @@ export async function threadMessageIds(scope: Scope, threadIds: string[], action
         break;
       case 'archive':
         ids.push(...list.filter((r) => r.specialUse === '\\Inbox' || r.path.toUpperCase() === 'INBOX').map((r) => r.id));
+        break;
+      case 'inbox':
+        ids.push(...list.filter((r) => r.specialUse === '\\Junk').map((r) => r.id));
         break;
       case 'trash':
         ids.push(...list.filter((r) => r.specialUse !== '\\Trash').map((r) => r.id));

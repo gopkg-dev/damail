@@ -2,6 +2,7 @@ import {
   CheckOutlined,
   CloseOutlined,
   ContainerOutlined,
+  InboxOutlined,
   DeleteOutlined,
   EyeInvisibleOutlined,
   EyeOutlined,
@@ -28,6 +29,8 @@ type Props = {
   folderId: string | null;
   /** 当前是「已删除」文件夹，删除按钮改为彻底删除 */
   inTrash?: boolean;
+  /** 垃圾邮件文件夹或所有邮箱的垃圾邮件视图：归档换成「移回收件箱」 */
+  inJunk?: boolean;
   q: string;
   selected: string | null;
   onSelect: (threadId: string) => void;
@@ -59,7 +62,7 @@ function useElementHeight<T extends HTMLElement>() {
   return [ref, height] as const;
 }
 
-export function ThreadList({ view, accountId, folderId, inTrash, q, selected, onSelect, onRemoved, unreadOnly, onUnreadOnly }: Props) {
+export function ThreadList({ view, accountId, folderId, inTrash, inJunk, q, selected, onSelect, onRemoved, unreadOnly, onUnreadOnly }: Props) {
   const { token } = theme.useToken();
   const { message, modal } = App.useApp();
   const qc = useQueryClient();
@@ -184,7 +187,7 @@ export function ThreadList({ view, accountId, folderId, inTrash, q, selected, on
       ]);
       const n = res.updated ?? res.moved ?? res.deleted ?? 0;
       message.success(t.threads.batchResult(t.threads.batchDone[action], res.destination, n));
-      if (action === 'archive' || action === 'trash' || action === 'delete') {
+      if (action === 'archive' || action === 'inbox' || action === 'trash' || action === 'delete') {
         onRemoved?.(ids);
         setChecked((prev) => new Set([...prev].filter((id) => !ids.includes(id))));
       }
@@ -428,7 +431,7 @@ export function ThreadList({ view, accountId, folderId, inTrash, q, selected, on
             {t.threads.selected(checked.size)}
           </Typography.Text>
           <Flex gap={2} style={{ marginLeft: 'auto' }}>
-            {batchButton('archive', t.threads.archive, <ContainerOutlined />)}
+            {inJunk ? batchButton('inbox', t.threads.moveToInbox, <InboxOutlined />) : batchButton('archive', t.threads.archive, <ContainerOutlined />)}
             {inTrash ? batchButton('delete', t.threads.deleteForever, <DeleteOutlined />, true) : batchButton('trash', t.threads.trash, <DeleteOutlined />)}
             {anyUnread ? batchButton('read', t.threads.markRead, <EyeOutlined />) : batchButton('unread', t.threads.markUnread, <EyeInvisibleOutlined />)}
             {anyUnstarred
@@ -465,7 +468,7 @@ export function ThreadList({ view, accountId, folderId, inTrash, q, selected, on
   return (
     <Flex vertical style={{ height: '100%' }}>
       {toolbar}
-      <ThreadContextMenu target={menu} inTrash={inTrash} onClose={() => setMenu(null)} onOpen={onSelect} runBatch={(a, ids) => void runBatch(a, ids)} />
+      <ThreadContextMenu target={menu} inTrash={inTrash} inJunk={inJunk} onClose={() => setMenu(null)} onOpen={onSelect} runBatch={(a, ids) => void runBatch(a, ids)} />
       <div ref={boxRef} className={`thread-list${dragging ? ' dragging' : ''}`} style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
         {query.isPending ? (
           <Flex align="center" justify="center" style={{ height: '100%' }}>

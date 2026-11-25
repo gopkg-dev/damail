@@ -52,7 +52,7 @@ const batchAction = z.object({
 
 const threadBatch = z.object({
   threadIds: z.array(z.string().min(1)).min(1).max(500),
-  action: z.enum(['read', 'unread', 'star', 'unstar', 'archive', 'trash', 'delete']),
+  action: z.enum(['read', 'unread', 'star', 'unstar', 'archive', 'inbox', 'trash', 'delete']),
 });
 
 const FLAG_ACTIONS = {
@@ -73,7 +73,7 @@ async function body(c: { req: { json: () => Promise<unknown> } }) {
   return c.req.json().catch(() => ({}));
 }
 
-const VIEWS = new Set<View>(['inbox', 'important', 'sent', 'starred', 'unread', 'all']);
+const VIEWS = new Set<View>(['inbox', 'important', 'sent', 'junk', 'starred', 'unread', 'all']);
 // 等回复是按会话算的，只给会话列表用
 const THREAD_VIEWS = new Set<View>([...VIEWS, 'waiting']);
 
@@ -286,7 +286,7 @@ export const v1Routes = new Hono<AppEnv>()
     let result: object;
     if (action in FLAG_ACTIONS) result = await setFlags(scope, ids, FLAG_ACTIONS[action as keyof typeof FLAG_ACTIONS]);
     else {
-      result = action === 'delete' ? await deleteMessages(scope, ids) : await moveMessages(scope, ids, action as 'archive' | 'trash');
+      result = action === 'delete' ? await deleteMessages(scope, ids) : await moveMessages(scope, ids, action as 'archive' | 'inbox' | 'trash');
       audit(actorOf(c.var.auth), `messages.${action}`, { detail: { ids, threadIds } });
     }
     return c.json(result);

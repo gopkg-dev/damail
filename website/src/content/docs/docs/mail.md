@@ -12,13 +12,14 @@ Mail from every mailbox comes together in one place. The sidebar switches betwee
 | Inbox | The inboxes of all mailboxes |
 | Important | Mail AI marked high priority |
 | Awaiting reply | Threads where you're waiting for an answer — see [Awaiting reply & follow-ups](/docs/automation/follow-ups/) |
-| Unread / Starred / Sent / All Mail | Across every mailbox |
+| Unread / Starred / Sent / All Mail | Across every mailbox (All Mail leaves out junk and trash) |
+| Junk | The junk folders of all mailboxes |
 | Categories / Labels | AI categories and your labels — see [Categories & labels](/docs/ai/labels/) |
 | Mailboxes | One mailbox's mail and folders |
 
 Messages about the same thing are grouped into **threads**, including replies you sent from other clients.
 
-- The list supports **multi-select** and a **right-click menu**: read / unread, star, archive, move, delete
+- The list supports **multi-select** and a **right-click menu**: read / unread, star, archive, move, delete; in junk, Archive becomes Move to Inbox
 - Read, starred, archive, delete and move are **written back to your mail server**, so your phone's mail app sees the same thing
 - Delete moves mail to Trash; in Trash you can **delete forever**, which removes it from the server permanently
 - The search box supports syntax such as `from:`, `has:attachment` and `is:unread` — see [Search syntax](/docs/search/) — or try [AI search](/docs/ai/search/)
