@@ -539,7 +539,7 @@ export function attachmentUrl(messageId: number, index: number, inline = false) 
   return `/api/v1/messages/${messageId}/attachments/${index}${inline ? '?inline=1' : ''}`;
 }
 
-export type ThreadBatchAction = 'read' | 'unread' | 'star' | 'unstar' | 'archive' | 'trash' | 'delete';
+export type ThreadBatchAction = 'read' | 'unread' | 'star' | 'unstar' | 'archive' | 'inbox' | 'trash' | 'delete';
 
 /** 按会话批量操作，服务端决定每个会话里具体处理哪些邮件 */
 export function threadBatchAction(threadIds: string[], action: ThreadBatchAction) {

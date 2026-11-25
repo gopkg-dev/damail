@@ -31,7 +31,7 @@ If your server cannot reach a provider directly (for example Gmail from mainland
 4. Under **API permissions**, add Microsoft Graph delegated permissions `offline_access` `Mail.ReadWrite` `Mail.Send` `User.Read`
 5. Enter the client ID and secret in DaMail under **Settings → OAuth apps**, then add an Outlook mailbox and click “Sign in and authorize”
 
-Microsoft mailboxes send and receive through the Graph API (some personal accounts can log in over IMAP but cannot open the mailbox). New mail is checked every minute, and a single message with attachments cannot exceed 4 MB.
+Microsoft mailboxes send and receive through the Graph API (some personal accounts can log in over IMAP but cannot open the mailbox). The inbox and junk folder are checked for new mail every minute, and a single message with attachments cannot exceed 4 MB.
 
 ## Gmail / Google Workspace (OAuth2)
 
@@ -47,7 +47,7 @@ While the app is in **Testing**, only test users can authorize and grants expire
 
 ## Sync behavior
 
-- Inboxes use IMAP IDLE, so new mail arrives within a second; other folders are polled
+- Inboxes use IMAP IDLE, so new mail arrives within a second; junk is checked every minute (verification codes often land there); other folders are polled
 - Read, starred and deleted states sync back from the server, and changes in DaMail (read, starred, archive, delete, move) are written to the server
 - Delete only moves mail to Trash; nothing is permanently deleted
 - Connections reconnect automatically with exponential backoff

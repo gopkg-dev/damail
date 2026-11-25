@@ -16,6 +16,8 @@ import { isMessageDataError } from '../lib/db-errors.js';
 const BATCH = 25;
 const TRUNCATED_BYTES = 2 * 1024 * 1024;
 const FLAG_WINDOW = 500;
+// 垃圾邮件没有 IDLE 推送，每分钟用 STATUS 看一眼（验证码常被误判进垃圾邮件，不能等 pollInterval）
+const JUNK_POLL_MS = 60_000;
 
 type SyncKind = 'none' | 'inbox' | 'all';
 const rank: Record<SyncKind, number> = { none: 0, inbox: 1, all: 2 };
@@ -30,6 +32,7 @@ function sleep(ms: number, signal: AbortSignal) {
 /**
  * 每个邮箱账户一个常驻 worker：
  * - 维持一条 IMAP 连接，选中 INBOX 后由 imapflow 自动 IDLE，收到 EXISTS 立即增量同步
+ * - 垃圾邮件每分钟用 STATUS 检查一次，有新邮件和收件箱一样进入自动化流程
  * - 其他文件夹按 pollInterval 轮询；断线指数退避重连
  * - 同步连接全程以 EXAMINE（只读）打开文件夹；标记、移动、APPEND 等写操作走 imap-writer 的独立连接
  */
@@ -39,7 +42,10 @@ export class AccountWorker {
   private pending: SyncKind = 'none';
   private draining: Promise<void> | null = null;
   private pollTimer: NodeJS.Timeout | null = null;
+  private junkTimer: NodeJS.Timeout | null = null;
   private inboxPath = 'INBOX';
+  /** 上次同步垃圾邮件时的 UIDNEXT，STATUS 返回的值变了才去同步 */
+  private junkUidNext: number | undefined;
 
   constructor(readonly accountId: number) {
     this.status = new StatusReporter(accountId);
@@ -51,7 +57,7 @@ export class AccountWorker {
 
   async stop() {
     this.abort.abort();
-    if (this.pollTimer) clearInterval(this.pollTimer);
+    this.clearTimers();
     const client = this.client;
     this.client = null;
     if (client) await client.logout().catch(() => client.close());
@@ -63,6 +69,12 @@ export class AccountWorker {
   requestSync(kind: Exclude<SyncKind, 'none'>) {
     if (rank[kind] > rank[this.pending]) this.pending = kind;
     if (!this.draining && this.client?.usable) this.draining = this.drain().finally(() => (this.draining = null));
+  }
+
+  private clearTimers() {
+    if (this.pollTimer) clearInterval(this.pollTimer);
+    if (this.junkTimer) clearInterval(this.junkTimer);
+    this.pollTimer = this.junkTimer = null;
   }
 
   private setStatus(status: string, error: string | null = null) {
@@ -105,13 +117,14 @@ export class AccountWorker {
         backoff = 0;
         this.requestSync('all');
         this.pollTimer = setInterval(() => this.requestSync('all'), pollIntervalMsOf(account));
+        this.junkTimer = setInterval(() => void this.pollJunk(), JUNK_POLL_MS);
         await closed;
-        if (this.pollTimer) clearInterval(this.pollTimer);
+        this.clearTimers();
         if (!this.abort.signal.aborted) await this.setStatus('connecting', L('连接已断开，正在重连', 'Connection lost; reconnecting'));
       } catch (err) {
         const message = describeImapError(err);
         console.warn(`[sync:${this.accountId}] ${message}`);
-        if (this.pollTimer) clearInterval(this.pollTimer);
+        this.clearTimers();
         this.client?.close();
         if (!this.abort.signal.aborted) await this.setStatus('error', message);
       }
@@ -157,7 +170,30 @@ export class AccountWorker {
       where: and(eq(folders.accountId, this.accountId), eq(folders.path, this.inboxPath)),
     });
     if (inbox?.syncEnabled) await this.syncFolder(client, inbox, true);
+    const junk = await this.junkWithNewMail(client);
+    if (junk) await this.syncFolder(client, junk, false);
     await this.selectInbox(client);
+  }
+
+  /** 垃圾邮件有新邮件时才排一次收件箱同步（会顺带同步垃圾邮件），没变化不切换「同步中」 */
+  private async pollJunk() {
+    const client = this.client;
+    if (!client?.usable || this.draining) return;
+    try {
+      if (await this.junkWithNewMail(client)) this.requestSync('inbox');
+    } catch (err) {
+      console.warn(`[sync:${this.accountId}] 检查垃圾邮件失败: ${describeImapError(err)}`);
+    }
+  }
+
+  /** 用 STATUS 检查垃圾邮件文件夹的 UIDNEXT，变了就返回这个文件夹；首次回溯交给全量同步 */
+  private async junkWithNewMail(client: ImapFlow): Promise<Folder | null> {
+    const junk = await db.query.folders.findFirst({
+      where: and(eq(folders.accountId, this.accountId), eq(folders.specialUse, '\\Junk')),
+    });
+    if (!junk?.syncEnabled || junk.lastUid === 0) return null;
+    const st = await client.status(junk.path, { uidNext: true });
+    return st && st.uidNext !== undefined && st.uidNext !== this.junkUidNext ? junk : null;
   }
 
   /** 让连接停在 INBOX 上，imapflow 空闲时会自动发 IDLE */
@@ -220,9 +256,9 @@ export class AccountWorker {
           uids = uids.filter((u) => u > lastUid);
         }
         const started = Date.now();
-        // 只有收件箱的增量新邮件进入自动化流程；首次回溯、UIDVALIDITY 重建不触发
-        const isInbox = folder.specialUse === '\\Inbox' || folder.path.toUpperCase() === 'INBOX';
-        const done = await this.downloadNew(client, folder, uids, isInbox && lastUid !== 0);
+        // 只有收件箱和垃圾邮件的增量新邮件进入自动化流程；首次回溯、UIDVALIDITY 重建不触发
+        const hot = folder.specialUse === '\\Inbox' || folder.specialUse === '\\Junk' || folder.path.toUpperCase() === 'INBOX';
+        const done = await this.downloadNew(client, folder, uids, hot && lastUid !== 0);
         // 中途被停止时不推进 lastUid，下次从头补齐（已入库的会跳过）
         if (done) for (const u of uids) if (u > maxUid) maxUid = u;
         if (uids.length) {
@@ -249,6 +285,8 @@ export class AccountWorker {
           lastSyncAt: new Date(),
         })
         .where(eq(folders.id, folder.id));
+      // 刚选中的文件夹 uidNext 是准的
+      if (folder.specialUse === '\\Junk') this.junkUidNext = mb.uidNext;
     } finally {
       lock.release();
     }

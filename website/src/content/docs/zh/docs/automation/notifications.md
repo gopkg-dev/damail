@@ -66,7 +66,7 @@ description: Bark、企业微信、钉钉、飞书、Telegram 和自定义 Webho
 |---|---|---|
 | 收信 | `message.received` | 收件箱收到新邮件（所有新邮件） |
 | 收信 | `message.important` | AI 判定为高优先级的新邮件 |
-| 收信 | `message.verification` | 收到验证码 |
+| 收信 | `message.verification` | 收到验证码（包括进了垃圾邮件的） |
 | 发信 | `draft.pending` | AI 助手、收信规则或 Agent 提交了待审批的邮件 |
 | 发信 | `draft.sent` | 邮件已发送 |
 | 发信 | `draft.failed` | 邮件发送失败 |

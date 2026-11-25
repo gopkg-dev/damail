@@ -15,7 +15,7 @@ import { completeMessage } from './message-source.js';
 /** 访问范围：API Key 可以限定只能看某些账户，null 表示全部 */
 export type Scope = { accountIds: number[] | null };
 
-export type View = 'inbox' | 'important' | 'sent' | 'starred' | 'unread' | 'all' | 'waiting';
+export type View = 'inbox' | 'important' | 'sent' | 'junk' | 'starred' | 'unread' | 'all' | 'waiting';
 
 export type ListOptions = {
   scope: Scope;
@@ -43,6 +43,8 @@ function isInbox() {
   return sql`(${folders.specialUse} = '\\Inbox' OR upper(${folders.path}) = 'INBOX')`;
 }
 
+const onlyVerification = (categories: string[]) => categories.length > 0 && categories.every((c) => c === 'verification');
+
 function buildFilters(opts: ListOptions): SQL[] {
   const conds: SQL[] = [];
   const { scope } = opts;
@@ -57,7 +59,10 @@ function buildFilters(opts: ListOptions): SQL[] {
   if (!hasFolderFilter) {
     if (view === 'inbox' || view === 'important') conds.push(isInbox());
     else if (view === 'sent') conds.push(sql`${folders.specialUse} = '\\Sent'`);
-    // 跨文件夹的视图和搜索不含垃圾箱、垃圾邮件，要看用 folder:trash / folder:junk
+    else if (view === 'junk') conds.push(sql`${folders.specialUse} = '\\Junk'`);
+    // 跨文件夹的视图和搜索不含垃圾箱、垃圾邮件，要看用 folder:trash / folder:junk；
+    // 只看验证码分类时算上垃圾邮件，验证码常被误判进去
+    else if (onlyVerification(q.category)) conds.push(sql`coalesce(${folders.specialUse}, '') <> '\\Trash'`);
     else conds.push(sql`coalesce(${folders.specialUse}, '') NOT IN ('\\Trash', '\\Junk')`);
   }
   if (view === 'starred') conds.push(eq(messages.flagged, true));
@@ -594,27 +599,30 @@ export async function getStats(scope: Scope) {
         `)
       ).rows
     : [];
-  // 各视图的数量，口径和 buildFilters 一致：跨文件夹的视图不含垃圾箱和垃圾邮件
+  // 各视图的数量，口径和 buildFilters 一致：跨文件夹的视图不含垃圾箱和垃圾邮件，垃圾邮件单独计数
   const [views] = ids.length
     ? (
-        await db.execute<{ unread: string; starred: string; sent: string; total: string }>(sql`
-          SELECT count(*) FILTER (WHERE NOT m.seen) AS unread,
-                 count(*) FILTER (WHERE m.flagged) AS starred,
+        await db.execute<{ unread: string; starred: string; sent: string; total: string; junk: string }>(sql`
+          SELECT count(*) FILTER (WHERE NOT junk AND NOT m.seen) AS unread,
+                 count(*) FILTER (WHERE NOT junk AND m.flagged) AS starred,
                  count(*) FILTER (WHERE f.special_use = '\\Sent') AS sent,
-                 count(*) AS total
-          FROM messages m JOIN folders f ON f.id = m.folder_id
-          WHERE m.account_id = ANY(${sql.param(ids)}::int[]) AND coalesce(f.special_use, '') NOT IN ('\\Trash', '\\Junk')
+                 count(*) FILTER (WHERE NOT junk) AS total,
+                 count(*) FILTER (WHERE junk) AS junk
+          FROM messages m JOIN folders f ON f.id = m.folder_id,
+               LATERAL (SELECT coalesce(f.special_use, '') = '\\Junk' AS junk) j
+          WHERE m.account_id = ANY(${sql.param(ids)}::int[]) AND coalesce(f.special_use, '') <> '\\Trash'
         `)
       ).rows
     : [];
-  // AI 分类的数量，口径和点分类进去的列表一致（全部邮件视图，不含垃圾箱和垃圾邮件）
+  // AI 分类的数量，口径和点分类进去的列表一致（全部邮件视图，不含垃圾箱和垃圾邮件；验证码算上垃圾邮件）
   const categories = ids.length
     ? (
         await db.execute<{ category: string; total: number; unread: number }>(sql`
           SELECT i.category, count(*)::int AS total, (count(*) FILTER (WHERE NOT m.seen))::int AS unread
           FROM messages m JOIN folders f ON f.id = m.folder_id
           JOIN message_insights i ON i.message_id = m.id
-          WHERE m.account_id = ANY(${sql.param(ids)}::int[]) AND coalesce(f.special_use, '') NOT IN ('\\Trash', '\\Junk')
+          WHERE m.account_id = ANY(${sql.param(ids)}::int[]) AND coalesce(f.special_use, '') <> '\\Trash'
+            AND (coalesce(f.special_use, '') <> '\\Junk' OR i.category = 'verification')
           GROUP BY i.category
         `)
       ).rows
@@ -650,6 +658,7 @@ export async function getStats(scope: Scope) {
     unreadTotal: Number(views?.unread ?? 0),
     starredTotal: Number(views?.starred ?? 0),
     sentTotal: Number(views?.sent ?? 0),
+    junkTotal: Number(views?.junk ?? 0),
     allTotal: Number(views?.total ?? 0),
     waitingTotal: waiting,
     // 草稿、待发和发送失败的，不含待审批（单独提醒）和已发送

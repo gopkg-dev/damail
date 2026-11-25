@@ -66,7 +66,7 @@ Pushing to private addresses (`10.x`, `192.168.x`, `localhost` and so on) is blo
 |---|---|---|
 | Incoming | `message.received` | New mail in the inbox (every message) |
 | Incoming | `message.important` | New mail marked high priority by AI |
-| Incoming | `message.verification` | A verification code arrived |
+| Incoming | `message.verification` | A verification code arrived (including ones that land in junk) |
 | Sending | `draft.pending` | The AI assistant, an inbox rule or an agent submitted mail for approval |
 | Sending | `draft.sent` | Mail sent |
 | Sending | `draft.failed` | Mail failed to send |

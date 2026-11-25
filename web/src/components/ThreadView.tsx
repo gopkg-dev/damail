@@ -2,6 +2,7 @@ import {
   ArrowLeftOutlined,
   BellOutlined,
   ContainerOutlined,
+  InboxOutlined,
   DeleteOutlined,
   DownloadOutlined,
   EditOutlined,
@@ -285,7 +286,7 @@ function ThreadDrafts({ threadId }: { threadId: string }) {
 }
 
 /** 阅读区的整会话操作，在全部邮箱视图里同样作用到其他邮箱里同一封邮件的会话 */
-const COPY_ACTIONS = new Set<BatchAction>(['read', 'unread', 'star', 'unstar', 'archive', 'trash', 'delete']);
+const COPY_ACTIONS = new Set<BatchAction>(['read', 'unread', 'star', 'unstar', 'archive', 'inbox', 'trash', 'delete']);
 
 export function ThreadView({
   threadId,
@@ -379,6 +380,7 @@ export function ThreadView({
   const last = messages[messages.length - 1]!;
   const starred = messages.some((m) => m.flagged) || (merged && !!query.data?.copiesFlagged);
   const inboxIds = messages.filter(isInbox).map((m) => m.id);
+  const junkIds = messages.filter((m) => m.folderSpecialUse === '\\Junk').map((m) => m.id);
   const trashIds = messages.filter((m) => m.folderSpecialUse !== '\\Trash').map((m) => m.id);
   const purgeIds = messages.filter((m) => m.folderSpecialUse === '\\Trash').map((m) => m.id);
   // 在「已删除」里打开，或整个会话都已在「已删除」里时，删除就是彻底删除
@@ -417,6 +419,11 @@ export function ThreadView({
             <Typography.Text type="secondary" style={{ marginRight: 4 }}>
               {t.reader.messageCount(messages.length)}
             </Typography.Text>
+          )}
+          {junkIds.length > 0 && (
+            <Tooltip title={t.reader.moveToInbox}>
+              <Button type="text" icon={<InboxOutlined />} loading={acting === 'inbox'} onClick={() => act('inbox', junkIds, t.reader.movedToInbox)} />
+            </Tooltip>
           )}
           {inboxIds.length > 0 && (
             <Tooltip title={t.reader.archive}>

@@ -35,13 +35,15 @@ Where to see it:
 
 ## When analysis runs
 
-Only **new mail arriving in the inbox** (dated within the last 3 days) is analyzed automatically. These do **not** trigger it, so you don't burn through credits at once:
+Only **new mail arriving in the inbox or junk folder** (dated within the last 3 days) is analyzed automatically. These do **not** trigger it, so you don't burn through credits at once:
 
 - The initial backfill after adding a mailbox
 - Folder rebuilds and resyncs
 - Moving old mail back to the inbox
 
 [Inbox rules](/docs/automation/rules/) and [notifications](/docs/automation/notifications/) run after analysis finishes, so rules can use the AI results.
+
+Verification codes often land in junk, so new junk mail is analyzed too, but only to push codes (`message.verification`): no inbox rules run, and no received or important notifications go out. The Verification category in the sidebar also counts and lists junk mail; other categories don't.
 
 ## Analyze past mail
 

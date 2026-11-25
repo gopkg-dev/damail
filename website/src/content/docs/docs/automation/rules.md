@@ -79,4 +79,4 @@ Every match is written to the **audit log**, including which actions ran and whe
 
 ## When rules don't run
 
-As with analysis, only new inbox mail from the last 3 days triggers rules. The initial backfill, resyncs and moving old mail back to the inbox don't.
+Only new inbox mail from the last 3 days triggers rules; new junk mail is analyzed and can push verification codes, but doesn't trigger rules. The initial backfill, resyncs and moving old mail back to the inbox don't.
