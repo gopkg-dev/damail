@@ -1,6 +1,7 @@
 const zh = {
   unanalyzed: '未分析',
-  openaiCompat: 'OpenAI 兼容',
+  openaiCompat: 'OpenAI Chat',
+  openaiResponses: 'OpenAI Responses',
   // 翻译的默认目标语言
   defaultTranslateLanguage: '简体中文',
   errors: {
@@ -32,7 +33,8 @@ const zh = {
 
 const en: typeof zh = {
   unanalyzed: 'Not analyzed',
-  openaiCompat: 'OpenAI-compatible',
+  openaiCompat: 'OpenAI Chat',
+  openaiResponses: 'OpenAI Responses',
   defaultTranslateLanguage: 'English',
   errors: {
     channelMissing: 'The selected channel no longer exists. Choose the model again',

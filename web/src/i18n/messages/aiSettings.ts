@@ -1,6 +1,8 @@
 const zh = {
-  openaiCompat: 'OpenAI 兼容',
-  openaiCompatApi: 'OpenAI 兼容接口',
+  openaiCompat: 'OpenAI Chat',
+  openaiCompatApi: 'OpenAI Chat',
+  openaiResponses: 'OpenAI Responses',
+  openaiResponsesApi: 'OpenAI Responses',
   claudeHints: { 'claude-opus-5-5': '最准确', 'claude-sonnet-5-5': '均衡', 'claude-haiku-5-5': '最便宜、最快' } as Record<string, string>,
   withHint: (model: string, hint: string) => `${model}（${hint}）`,
   upstreamCount: (n: number) => `上游共 ${n} 个模型`,
@@ -21,7 +23,8 @@ const zh = {
   provider: '服务商',
   baseUrlAnthropic: '官方接口留空；也可以填兼容 Anthropic 协议的代理地址',
   baseUrlOpenai: '会调用 {Base URL}/chat/completions 和 /models',
-  baseUrlRequired: 'OpenAI 兼容接口需要填写 Base URL',
+  baseUrlOpenaiResponses: '会调用 {Base URL}/responses 和 /models',
+  baseUrlRequired: 'OpenAI 接口需要填写 Base URL',
   keyTip: '加密保存在本地数据库',
   keyWillClear: '保存设置后清除已保存的 Key',
   undoClear: '撤销清除',
@@ -98,8 +101,10 @@ const zh = {
 };
 
 const en: typeof zh = {
-  openaiCompat: 'OpenAI-compatible',
-  openaiCompatApi: 'OpenAI-compatible API',
+  openaiCompat: 'OpenAI Chat',
+  openaiCompatApi: 'OpenAI Chat',
+  openaiResponses: 'OpenAI Responses',
+  openaiResponsesApi: 'OpenAI Responses',
   claudeHints: { 'claude-opus-5-5': 'most accurate', 'claude-sonnet-5-5': 'balanced', 'claude-haiku-5-5': 'cheapest, fastest' },
   withHint: (model: string, hint: string) => `${model} (${hint})`,
   upstreamCount: (n: number) => `${n} models upstream`,
@@ -121,7 +126,8 @@ const en: typeof zh = {
   provider: 'Provider',
   baseUrlAnthropic: 'Leave blank for the official API, or enter an Anthropic-compatible proxy URL',
   baseUrlOpenai: 'Calls {Base URL}/chat/completions and /models',
-  baseUrlRequired: 'OpenAI-compatible APIs need a Base URL',
+  baseUrlOpenaiResponses: 'Calls {Base URL}/responses and /models',
+  baseUrlRequired: 'OpenAI APIs need a Base URL',
   keyTip: 'Stored encrypted in the local database',
   keyWillClear: 'The saved key will be cleared when you save settings',
   undoClear: 'Undo clear',

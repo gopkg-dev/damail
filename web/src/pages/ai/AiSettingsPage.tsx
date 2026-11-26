@@ -113,7 +113,10 @@ function ChannelState({ s }: { s: AiChannelStatus | undefined }) {
   );
 }
 
-const providerLabel = (p: AiProvider) => (p === 'anthropic' ? 'Anthropic' : t.aiSettings.openaiCompat);
+const isOpenAI = (p?: AiProvider) => p === 'openai' || p === 'openai-responses';
+
+const providerLabel = (p: AiProvider) =>
+  p === 'anthropic' ? 'Anthropic' : p === 'openai-responses' ? t.aiSettings.openaiResponses : t.aiSettings.openaiCompat;
 
 const newId = () => Math.random().toString(36).slice(2, 10);
 
@@ -288,6 +291,7 @@ function ChannelModal({ channel, onCancel, onOk }: { channel: ChannelDraft; onCa
             options={[
               { value: 'anthropic', label: 'Anthropic Claude' },
               { value: 'openai', label: t.aiSettings.openaiCompatApi },
+              { value: 'openai-responses', label: t.aiSettings.openaiResponsesApi },
             ]}
             onChange={(v) => {
               // 换服务商后原来的模型列表多半不通用
@@ -300,10 +304,20 @@ function ChannelModal({ channel, onCancel, onOk }: { channel: ChannelDraft; onCa
         <Form.Item
           name="baseUrl"
           label="Base URL"
-          extra={provider === 'anthropic' ? t.aiSettings.baseUrlAnthropic : t.aiSettings.baseUrlOpenai}
-          rules={[{ required: provider === 'openai', message: t.aiSettings.baseUrlRequired }]}
+          extra={
+            provider === 'anthropic'
+              ? t.aiSettings.baseUrlAnthropic
+              : provider === 'openai-responses'
+                ? t.aiSettings.baseUrlOpenaiResponses
+                : t.aiSettings.baseUrlOpenai
+          }
+          rules={[{ required: isOpenAI(provider), message: t.aiSettings.baseUrlRequired }]}
         >
-          <Input placeholder={provider === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.example.com/v1'} />
+          <Input
+            placeholder={
+              provider === 'anthropic' ? 'https://api.anthropic.com' : provider === 'openai-responses' ? 'https://api.openai.com/v1' : 'https://api.example.com/v1'
+            }
+          />
         </Form.Item>
         <Form.Item label="API Key" tooltip={tip(t.aiSettings.keyTip)}>
           <Space.Compact style={{ width: '100%' }}>
@@ -667,7 +681,7 @@ export function AiSettingsPage() {
                       </Space>
                     ),
                   },
-                  { title: t.aiSettings.provider, key: 'provider', width: 130, render: (_, ch) => providerLabel(ch.provider) },
+                  { title: t.aiSettings.provider, key: 'provider', width: 150, render: (_, ch) => providerLabel(ch.provider) },
                   {
                     title: t.aiSettings.baseUrl,
                     key: 'baseUrl',
@@ -763,7 +777,7 @@ export function AiSettingsPage() {
                     <Form.Item name="model" label={t.aiSettings.model} rules={[{ required: true, message: t.aiSettings.modelRequired }]}>
                       <AutoComplete options={modelOptions(defaultChannel)} showSearch={{ filterOption }} placeholder={t.aiSettings.pickOrType} />
                     </Form.Item>
-                    {defaultChannel?.provider !== 'openai' && (
+                    {!isOpenAI(defaultChannel?.provider) && (
                       <Form.Item name="effort" label={t.aiSettings.effort} extra={t.aiSettings.effortExtra} style={{ marginBottom: 0 }}>
                         <Segmented options={effortOptions('anthropic').slice(0, 3)} />
                       </Form.Item>
@@ -806,7 +820,7 @@ export function AiSettingsPage() {
                     <Form.Item
                       name="assistantEffort"
                       label={t.aiSettings.thinking}
-                      extra={assistantChannel?.provider === 'openai' ? undefined : t.aiSettings.thinkingExtra}
+                      extra={isOpenAI(assistantChannel?.provider) ? undefined : t.aiSettings.thinkingExtra}
                       style={{ marginBottom: 0 }}
                     >
                       <Segmented options={[{ value: '', label: t.aiSettings.default }, ...effortOptions(assistantChannel?.provider ?? 'anthropic')]} />

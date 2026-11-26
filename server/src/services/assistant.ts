@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
 import { z } from 'zod';
 import type { AuthContext } from '../auth/index.js';
 import { db } from '../db/index.js';
@@ -6,9 +7,9 @@ import type { AssistantUsage } from '../db/schema.js';
 import { intlLocale, L } from '../i18n/index.js';
 import { prompt } from './catalog.js';
 import { ActionError } from './actions.js';
-import { AiError, CATEGORIES, getAssistantAiConfig, type AssistantOverride } from './ai.js';
+import { AiError, CATEGORIES, getAssistantAiConfig, openaiClient, openaiErrorMessage, type AssistantOverride } from './ai.js';
 import { acquireAiSlot, noteAiSuccess, noteRateLimited, parseRetryAfter } from './ai-limit.js';
-import { costOf, recordAiRequest, setAnthropicUsage, setOpenAIUsage, type AiUsage } from './ai-usage.js';
+import { costOf, recordAiRequest, setAnthropicUsage, setOpenAIResponsesUsage, setOpenAIUsage, type AiUsage } from './ai-usage.js';
 
 type AssistantConfig = Awaited<ReturnType<typeof getAssistantAiConfig>>;
 import { ANALYTICS_RANGES, getAnalytics, type AnalyticsRange } from './analytics.js';
@@ -296,6 +297,7 @@ export async function runAssistant(auth: AuthContext, history: ChatTurn[], emit:
   const totals: Totals = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cost: null, durationMs: 0, rounds: 0, priced: true };
   try {
     if (c.provider === 'anthropic') await loopAnthropic(c, auth, system, turns, emit, signal, totals);
+    else if (c.provider === 'openai-responses') await loopOpenAIResponses(c, auth, system, turns, emit, signal, totals);
     else await loopOpenAI(c, auth, system, turns, emit, signal, totals);
   } finally {
     // 出错或中止时也把已经产生的用量发出去；有一轮没有价格就不显示费用，免得少算
@@ -416,27 +418,43 @@ async function loopAnthropic(c: AssistantConfig, auth: AuthContext, system: stri
   emit({ type: 'text', delta: L('\n\n（工具调用次数达到上限，先回答到这里）', '\n\n(Tool call limit reached; stopping here)') });
 }
 
-type OaMessage =
-  | { role: 'system' | 'user'; content: string }
-  | { role: 'assistant'; content: string | null; tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }> }
-  | { role: 'tool'; tool_call_id: string; content: string };
+function handleOpenAIStreamError(err: unknown, c: AssistantConfig, started: number, usage: AiUsage, signal: AbortSignal): 'aborted' | never {
+  if (signal.aborted || err instanceof OpenAI.APIUserAbortError) {
+    recordAiRequest(c, 'assistant', { started, usage, error: L('已中止', 'Aborted') });
+    return 'aborted';
+  }
+  if (err instanceof AiError) throw err;
+  if (err instanceof OpenAI.RateLimitError) noteRateLimited(c.channelId, parseRetryAfter(err.headers?.get('retry-after')));
+  const message =
+    err instanceof OpenAI.APIConnectionError
+      ? L(`无法连接 AI 接口：${err.message}`, `Could not connect to the AI API: ${err.message}`)
+      : err instanceof OpenAI.APIError
+        ? L(`AI 接口错误 ${err.status ?? ''}：${openaiErrorMessage(err)}`, `AI API error ${err.status ?? ''}: ${openaiErrorMessage(err)}`)
+        : L(`读取 AI 回复中断：${(err as Error).message}`, `AI response interrupted: ${(err as Error).message}`);
+  recordAiRequest(c, 'assistant', { started, usage, error: message });
+  throw new AiError(message);
+}
+
+type CompatDelta = OpenAI.Chat.Completions.ChatCompletionChunk.Choice.Delta & {
+  // DeepSeek、Gemini 等兼容接口把思考过程放在这里
+  reasoning_content?: string | null;
+  reasoning?: string | null;
+};
 
 async function loopOpenAI(c: AssistantConfig, auth: AuthContext, system: string, turns: ChatTurn[], emit: Emit, signal: AbortSignal, totals: Totals) {
-  if (!c.baseUrl) throw new AiError(L('请填写接口地址（Base URL）', 'Enter the API base URL'));
-  const url = `${c.baseUrl.replace(/\/+$/, '')}/chat/completions`;
-  const defs = Object.entries(tools).map(([name, t]) => ({
-    type: 'function' as const,
-    function: { name, description: t.description, parameters: z.toJSONSchema(t.schema) },
+  const client = openaiClient(c);
+  const defs: OpenAI.Chat.Completions.ChatCompletionTool[] = Object.entries(tools).map(([name, t]) => ({
+    type: 'function',
+    function: { name, description: t.description, parameters: z.toJSONSchema(t.schema) as Record<string, unknown> },
   }));
-  const messages: OaMessage[] = [{ role: 'system', content: system }, ...turns.map((t) => ({ role: t.role, content: t.content }))];
+  const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
+    { role: 'system', content: system },
+    ...turns.map((t) => ({ role: t.role, content: t.content })),
+  ];
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
     const started = Date.now();
     const usage: AiUsage = {};
-    const fail = (message: string) => {
-      recordAiRequest(c, 'assistant', { started, usage, error: message });
-      return new AiError(message);
-    };
     let text = '';
     const calls: Array<{ id: string; name: string; args: string }> = [];
     let finish: string | null = null;
@@ -451,84 +469,45 @@ async function loopOpenAI(c: AssistantConfig, auth: AuthContext, system: string,
       throw err;
     }
     try {
-      let res: Response;
-      try {
-        res = await fetch(url, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', ...(c.apiKey ? { authorization: `Bearer ${c.apiKey}` } : {}) },
-          body: JSON.stringify({
-            model: c.model,
-            messages,
-            tools: defs,
-            stream: true,
-            // 让流的最后一块带上用量
-            stream_options: { include_usage: true },
-            ...(c.effort ? { reasoning_effort: c.effort } : {}),
-          }),
-          signal,
-        });
-      } catch (err) {
-        if (signal.aborted) return void recordAiRequest(c, 'assistant', { started, error: L('已中止', 'Aborted') });
-        throw fail(L(`无法连接 AI 接口：${(err as Error).message}`, `Could not connect to the AI API: ${(err as Error).message}`));
-      }
-      if (res.status === 429) noteRateLimited(c.channelId, parseRetryAfter(res.headers.get('retry-after')));
-      if (!res.ok || !res.body) throw fail(L(`AI 接口错误 ${res.status}：`, `AI API error ${res.status}: `) + (await res.text()).slice(0, 300));
-
-      const decoder = new TextDecoder();
-      let buf = '';
-      try {
-        for await (const chunk of res.body) {
-          buf += decoder.decode(chunk as Uint8Array, { stream: true });
-          let nl: number;
-          while ((nl = buf.indexOf('\n')) >= 0) {
-            const line = buf.slice(0, nl).trim();
-            buf = buf.slice(nl + 1);
-            if (!line.startsWith('data:')) continue;
-            const payload = line.slice(5).trim();
-            if (payload === '[DONE]') continue;
-            let data: {
-              choices?: Array<{
-                delta?: {
-                  content?: string | null;
-                  // DeepSeek、Gemini 等兼容接口把思考过程放在这里
-                  reasoning_content?: string | null;
-                  reasoning?: string | null;
-                  tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }>;
-                };
-                finish_reason?: string | null;
-              }>;
-              usage?: Parameters<typeof setOpenAIUsage>[1];
-            };
-            try {
-              data = JSON.parse(payload);
-            } catch {
-              continue;
-            }
-            setOpenAIUsage(usage, data.usage);
-            const choice = data.choices?.[0];
-            if (!choice) continue;
-            const d = choice.delta;
-            if (d?.content || d?.reasoning_content || d?.reasoning || d?.tool_calls?.length) firstAt ??= Date.now();
-            const thought = d?.reasoning_content ?? d?.reasoning;
-            if (thought) emit({ type: 'thinking', delta: thought });
-            if (d?.content) {
-              text += d.content;
-              emit({ type: 'text', delta: d.content });
-            }
-            for (const tc of d?.tool_calls ?? []) {
-              const i = tc.index ?? calls.length;
-              calls[i] ??= { id: '', name: '', args: '' };
-              if (tc.id) calls[i].id = tc.id;
-              if (tc.function?.name) calls[i].name += tc.function.name;
-              if (tc.function?.arguments) calls[i].args += tc.function.arguments;
-            }
-            if (choice.finish_reason) finish = choice.finish_reason;
-          }
+      const stream = await client.chat.completions.create(
+        {
+          model: c.model,
+          messages,
+          tools: defs,
+          stream: true,
+          // 让流的最后一块带上用量
+          stream_options: { include_usage: true },
+          ...(c.effort ? { reasoning_effort: c.effort } : {}),
+        },
+        { signal },
+      );
+      for await (const chunk of stream) {
+        setOpenAIUsage(usage, chunk.usage);
+        const choice = chunk.choices?.[0];
+        if (!choice) continue;
+        const d = choice.delta as CompatDelta | undefined;
+        if (d?.content || d?.reasoning_content || d?.reasoning || d?.tool_calls?.length) firstAt ??= Date.now();
+        const thought = d?.reasoning_content ?? d?.reasoning;
+        if (thought) emit({ type: 'thinking', delta: thought });
+        if (d?.content) {
+          text += d.content;
+          emit({ type: 'text', delta: d.content });
         }
-      } catch (err) {
-        if (signal.aborted) return void recordAiRequest(c, 'assistant', { started, usage, error: L('已中止', 'Aborted') });
-        throw fail(L(`读取 AI 回复中断：${(err as Error).message}`, `AI response interrupted: ${(err as Error).message}`));
+        for (const tc of d?.tool_calls ?? []) {
+          const i = tc.index ?? calls.length;
+          calls[i] ??= { id: '', name: '', args: '' };
+          if (tc.id) calls[i].id = tc.id;
+          if (tc.function?.name) calls[i].name += tc.function.name;
+          if (tc.function?.arguments) calls[i].args += tc.function.arguments;
+        }
+        if (choice.finish_reason) finish = choice.finish_reason;
       }
+      if (signal.aborted) {
+        recordAiRequest(c, 'assistant', { started, usage, error: L('已中止', 'Aborted') });
+        return;
+      }
+    } catch (err) {
+      if (handleOpenAIStreamError(err, c, started, usage, signal) === 'aborted') return;
     } finally {
       release();
     }
@@ -562,6 +541,203 @@ async function loopOpenAI(c: AssistantConfig, auth: AuthContext, system: string,
       }
       const r = await execTool(auth, x.id, x.name, input, emit);
       messages.push({ role: 'tool', tool_call_id: x.id, content: r.content });
+    }
+    if (text) emit({ type: 'text', delta: '\n\n' });
+  }
+  emit({ type: 'text', delta: L('\n\n（工具调用次数达到上限，先回答到这里）', '\n\n(Tool call limit reached; stopping here)') });
+}
+
+async function loopOpenAIResponses(c: AssistantConfig, auth: AuthContext, system: string, turns: ChatTurn[], emit: Emit, signal: AbortSignal, totals: Totals) {
+  const client = openaiClient(c);
+  const defs: OpenAI.Responses.FunctionTool[] = Object.entries(tools).map(([name, t]) => ({
+    type: 'function',
+    name,
+    description: t.description,
+    parameters: z.toJSONSchema(t.schema) as Record<string, unknown>,
+    strict: false,
+  }));
+  const input: OpenAI.Responses.ResponseInputItem[] = turns.map((t) => ({ type: 'message', role: t.role, content: t.content }));
+
+  for (let round = 0; round < MAX_ROUNDS; round++) {
+    const started = Date.now();
+    const usage: AiUsage = {};
+    const fail = (message: string) => {
+      recordAiRequest(c, 'assistant', { started, usage, error: message });
+      return new AiError(message);
+    };
+    let text = '';
+    let thinkingWrote = false;
+    let firstAt: number | null = null;
+    const callsByIndex = new Map<number, { call_id: string; name: string; arguments: string }>();
+    const doneItemsByIndex = new Map<number, OpenAI.Responses.ResponseOutputItem>();
+    let completedOutput: OpenAI.Responses.ResponseOutputItem[] | null = null;
+
+    // 按渠道的并发上限排队；渠道被限流暂停时等暂停结束
+    let release: () => void;
+    try {
+      release = await acquireAiSlot(c, signal);
+    } catch (err) {
+      if (signal.aborted) return;
+      throw err;
+    }
+    try {
+      const stream = await client.responses.create(
+        {
+          model: c.model,
+          instructions: system,
+          input,
+          tools: defs,
+          stream: true,
+          store: false,
+          // 设置了思考强度时才要推理参数：非推理模型会拒绝 reasoning / 加密推理内容。
+          // store: false 时要回加密推理内容，多轮工具调用时传回以保持推理上下文
+          ...(c.effort ? { reasoning: { effort: c.effort, summary: 'auto' as const }, include: ['reasoning.encrypted_content' as const] } : {}),
+        },
+        { signal },
+      );
+      for await (const ev of stream) {
+        switch (ev.type) {
+          case 'response.output_text.delta':
+            if (ev.delta) {
+              firstAt ??= Date.now();
+              text += ev.delta;
+              emit({ type: 'text', delta: ev.delta });
+            }
+            break;
+          case 'response.reasoning_summary_part.added':
+            if (thinkingWrote && ev.summary_index > 0) emit({ type: 'thinking', delta: '\n\n' });
+            break;
+          case 'response.reasoning_summary_text.delta':
+          case 'response.reasoning_text.delta':
+            if (ev.delta) {
+              firstAt ??= Date.now();
+              thinkingWrote = true;
+              emit({ type: 'thinking', delta: ev.delta });
+            }
+            break;
+          case 'response.output_item.added':
+            if (ev.item.type === 'function_call') {
+              firstAt ??= Date.now();
+              callsByIndex.set(ev.output_index, {
+                call_id: ev.item.call_id ?? '',
+                name: ev.item.name ?? '',
+                arguments: ev.item.arguments ?? '',
+              });
+            }
+            break;
+          case 'response.function_call_arguments.delta':
+            if (ev.delta) {
+              firstAt ??= Date.now();
+              let call = callsByIndex.get(ev.output_index);
+              if (!call) {
+                call = { call_id: '', name: '', arguments: '' };
+                callsByIndex.set(ev.output_index, call);
+              }
+              call.arguments += ev.delta;
+            }
+            break;
+          case 'response.function_call_arguments.done': {
+            const call = callsByIndex.get(ev.output_index);
+            if (call && typeof ev.arguments === 'string') call.arguments = ev.arguments;
+            break;
+          }
+          case 'response.output_item.done':
+            doneItemsByIndex.set(ev.output_index, ev.item);
+            if (ev.item.type === 'function_call') {
+              const prev = callsByIndex.get(ev.output_index);
+              callsByIndex.set(ev.output_index, {
+                call_id: ev.item.call_id || prev?.call_id || '',
+                name: ev.item.name || prev?.name || '',
+                arguments: typeof ev.item.arguments === 'string' ? ev.item.arguments : (prev?.arguments ?? ''),
+              });
+            }
+            break;
+          case 'response.completed':
+            setOpenAIResponsesUsage(usage, ev.response.usage);
+            if (Array.isArray(ev.response.output)) completedOutput = ev.response.output;
+            break;
+          case 'response.failed': {
+            setOpenAIResponsesUsage(usage, ev.response.usage);
+            const msg = ev.response.error?.message || L('模型请求失败', 'Model request failed');
+            throw fail(L(`AI 接口错误：${msg}`, `AI API error: ${msg}`));
+          }
+          case 'response.incomplete': {
+            setOpenAIResponsesUsage(usage, ev.response.usage);
+            const reason = ev.response.incomplete_details?.reason;
+            throw fail(reason ? L(`输出未完成（${reason}）`, `Response incomplete (${reason})`) : L('输出未完成', 'Response incomplete'));
+          }
+          case 'error': {
+            const msg = ev.message || L('模型请求失败', 'Model request failed');
+            throw fail(L(`AI 接口错误：${msg}`, `AI API error: ${msg}`));
+          }
+        }
+      }
+      if (signal.aborted) {
+        recordAiRequest(c, 'assistant', { started, usage, error: L('已中止', 'Aborted') });
+        return;
+      }
+    } catch (err) {
+      if (handleOpenAIStreamError(err, c, started, usage, signal) === 'aborted') return;
+    } finally {
+      release();
+    }
+    noteAiSuccess(c.channelId);
+    recordAiRequest(c, 'assistant', { started, usage, error: null });
+    addRound(totals, c, usage, started, firstAt);
+
+    // 优先使用 response.completed 里的完整 output，否则按 output_index 回退到流式收集的结果
+    const rawOutput: OpenAI.Responses.ResponseOutputItem[] = completedOutput?.length
+      ? completedOutput
+      : doneItemsByIndex.size
+        ? [...doneItemsByIndex.entries()].sort((a, b) => a[0] - b[0]).map(([, item]) => item)
+        : [];
+    if (!rawOutput.some((it) => it.type === 'function_call') && callsByIndex.size) {
+      for (const [, call] of [...callsByIndex.entries()].sort((a, b) => a[0] - b[0])) {
+        rawOutput.push({ type: 'function_call', call_id: call.call_id, name: call.name, arguments: call.arguments });
+      }
+    }
+
+    const hasCalls = rawOutput.some((it) => it.type === 'function_call' && Boolean(it.name));
+    if (!hasCalls) return;
+
+    const toExec: Array<{ call_id: string; name: string; arguments: string }> = [];
+    const hasMessageItem = rawOutput.some((it) => it.type === 'message');
+    if (text && !hasMessageItem) input.push({ type: 'message', role: 'assistant', content: text });
+
+    // 把本轮模型输出（推理项、文本消息、函数调用）追加到 input，去掉服务端临时 id 以适配 store: false
+    for (const item of rawOutput) {
+      if (item.type === 'reasoning') {
+        const summary = Array.isArray(item.summary) ? item.summary : [];
+        if (item.encrypted_content || summary.length || item.content) {
+          input.push({
+            type: 'reasoning',
+            summary,
+            ...(item.encrypted_content ? { encrypted_content: item.encrypted_content } : {}),
+            ...(item.content ? { content: item.content } : {}),
+          } as OpenAI.Responses.ResponseInputItem);
+        }
+      } else if (item.type === 'message' && item.content) {
+        input.push({ type: 'message', role: 'assistant', content: item.content } as OpenAI.Responses.ResponseInputItem);
+      } else if (item.type === 'function_call' && item.name) {
+        const callId = item.call_id || `call_${round}_${toExec.length}`;
+        const args = typeof item.arguments === 'string' ? item.arguments : '';
+        toExec.push({ call_id: callId, name: item.name, arguments: args });
+        input.push({ type: 'function_call', call_id: callId, name: item.name, arguments: args || '{}' });
+      }
+    }
+
+    for (const x of toExec) {
+      let args: unknown;
+      try {
+        args = JSON.parse(x.arguments || '{}');
+      } catch {
+        emit({ type: 'tool', id: x.call_id, name: x.name, label: toolLabel(x.name, {}) });
+        emit({ type: 'tool_done', id: x.call_id, ok: false, summary: L('参数不是合法 JSON', 'Arguments are not valid JSON') });
+        input.push({ type: 'function_call_output', call_id: x.call_id, output: JSON.stringify({ error: 'INVALID_JSON', arguments: x.arguments.slice(0, 500) }) });
+        continue;
+      }
+      const r = await execTool(auth, x.call_id, x.name, args, emit);
+      input.push({ type: 'function_call_output', call_id: x.call_id, output: r.content });
     }
     if (text) emit({ type: 'text', delta: '\n\n' });
   }
