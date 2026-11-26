@@ -3,7 +3,7 @@ import type { FetchMessageObject, ImapFlow, MailboxObject } from 'imapflow';
 import { config, pollIntervalMsOf } from '../config.js';
 import { db } from '../db/index.js';
 import { accounts, folders, messages, type Folder } from '../db/schema.js';
-import { accountCredentials } from '../services/oauth.js';
+import { accountCredentials, isReauthRequired } from '../services/oauth.js';
 import { proxyUrlById } from '../services/proxy.js';
 import { bus } from '../lib/events.js';
 import { ingestMessage } from '../services/ingest.js';
@@ -127,6 +127,11 @@ export class AccountWorker {
         this.clearTimers();
         this.client?.close();
         if (!this.abort.signal.aborted) await this.setStatus('error', message);
+        if (isReauthRequired(err)) {
+          // 授权已彻底失效，退出重连循环等待重新授权
+          this.client = null;
+          return;
+        }
       }
       this.client = null;
       if (this.abort.signal.aborted) return;

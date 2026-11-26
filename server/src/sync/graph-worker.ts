@@ -5,6 +5,7 @@ import { accounts, folders, messages, type Account, type Folder } from '../db/sc
 import { bus } from '../lib/events.js';
 import { readCapped } from '../lib/read-capped.js';
 import { ingestMessage } from '../services/ingest.js';
+import { isReauthRequired } from '../services/oauth.js';
 import { onNewMessage } from '../services/pipeline.js';
 import { describeGraphError, graphBatch, graphFetch, graphJson, GraphError } from './graph.js';
 import { isDefaultSynced, nextUid, StatusReporter } from './status.js';
@@ -70,9 +71,13 @@ export class GraphWorker {
   async stop() {
     this.abort.abort();
     this.running = false;
+    this.clearTimers();
+    await this.draining;
+  }
+
+  private clearTimers() {
     for (const t of this.timers) clearInterval(t);
     this.timers = [];
-    await this.draining;
   }
 
   requestSync(kind: Exclude<SyncKind, 'none'>) {
@@ -87,11 +92,12 @@ export class GraphWorker {
       return;
     }
     if (this.abort.signal.aborted) return;
-    this.running = true;
     await this.status.set('connecting');
-    this.requestSync('all');
+    if (this.abort.signal.aborted) return;
+    this.running = true;
     this.timers.push(setInterval(() => this.requestSync('inbox'), INBOX_POLL_MS));
     this.timers.push(setInterval(() => this.requestSync('all'), pollIntervalMsOf(account)));
+    this.requestSync('all');
   }
 
   private async drain() {
@@ -113,7 +119,13 @@ export class GraphWorker {
         const message = describeGraphError(err);
         if (message !== this.lastError) console.warn(`[sync:${this.accountId}] 同步失败: ${message}`);
         this.lastError = message;
-        await this.status.set('error', message);
+        if (!this.abort.signal.aborted) await this.status.set('error', message);
+        if (isReauthRequired(err)) {
+          // 授权已彻底失效，停止轮询等待重新授权（重新授权会调用 restartAccount 重建 worker）
+          this.running = false;
+          this.pending = 'none';
+          this.clearTimers();
+        }
         return;
       }
     }

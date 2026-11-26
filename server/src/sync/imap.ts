@@ -1,6 +1,7 @@
 import { ImapFlow } from 'imapflow';
 import { L } from '../i18n/index.js';
 import { allowsPlaintext } from '../lib/transport-security.js';
+import { OAuthRefreshError } from '../services/oauth.js';
 
 export type ImapParams = {
   host: string;
@@ -38,6 +39,7 @@ export function createImapClient(p: ImapParams): ImapFlow {
 type ImapError = Error & { code?: string; responseText?: string; authenticationFailed?: boolean };
 
 export function describeImapError(err: unknown): string {
+  if (err instanceof OAuthRefreshError) return err.message;
   const e = err as ImapError;
   const text = `${e?.responseText ?? ''} ${e?.message ?? ''}`;
   if (/unsafe login/i.test(text)) return L('服务商拦截了不安全登录：请确认已开启 IMAP，并使用授权码登录', 'The provider blocked an insecure sign-in: make sure IMAP is enabled and sign in with an authorization code');
