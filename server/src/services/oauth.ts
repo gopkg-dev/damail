@@ -181,6 +181,45 @@ export async function oauthAuthorizeUrl(p: OAuthProvider, userId: number, accoun
 type TokenResponse = { access_token: string; refresh_token?: string; expires_in: number; id_token?: string; error?: string; error_description?: string };
 type StoredTokens = { refreshToken: string; accessToken: string; expiresAt: number };
 
+// 这些 OAuth 错误表示 refresh token / 授权本身已失效，重试没有意义，必须重新授权
+const REAUTH_ERRORS = new Set(['invalid_grant', 'interaction_required', 'consent_required']);
+const CLIENT_ERRORS = new Set(['invalid_client', 'unauthorized_client']);
+
+export class OAuthTokenError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code?: string,
+  ) {
+    super(message);
+    this.name = 'OAuthTokenError';
+  }
+}
+
+export class OAuthRefreshError extends Error {
+  constructor(
+    message: string,
+    readonly reauthRequired: boolean,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = 'OAuthRefreshError';
+  }
+}
+
+export function isReauthRequired(err: unknown): boolean {
+  return err instanceof OAuthRefreshError && err.reauthRequired;
+}
+
+function refreshFailureReason(err: unknown): string {
+  if (err instanceof OAuthTokenError) return err.message;
+  const e = err as Error & { code?: string; cause?: { message?: string; code?: string } };
+  if (e?.name === 'TimeoutError') return L('请求超时', 'request timed out');
+  const causeMsg = e?.cause?.message || e?.cause?.code;
+  if (causeMsg) return causeMsg;
+  return e?.message || e?.code || String(err);
+}
+
 /** proxyId 为 undefined 时用 OAuth 应用设置的代理 */
 async function tokenRequest(p: OAuthProvider, body: Record<string, string>, proxyId?: number | null): Promise<TokenResponse> {
   const spec = SPECS[p];
@@ -196,8 +235,10 @@ async function tokenRequest(p: OAuthProvider, body: Record<string, string>, prox
   });
   const data = (await res.json().catch(() => ({}))) as TokenResponse;
   if (!res.ok || !data.access_token)
-    throw new Error(
+    throw new OAuthTokenError(
       data.error_description?.split('\n')[0] || data.error || L(`${spec.label}登录失败（${res.status}）`, `${spec.label} sign-in failed (${res.status})`),
+      res.status,
+      data.error,
     );
   return data;
 }
@@ -260,7 +301,6 @@ async function exchangeCode(p: OAuthProvider, pend: PendingAuth, code: string): 
           `The signed-in ${spec.label} account (${who.email}) does not match the mailbox being re-authorized (${existing.email})`,
         ),
       );
-    tokenCache.delete(existing.id);
     // 原来用密码直连的同一个邮箱，改成 OAuth 并换上服务商的服务器
     const servers = existing.authType === 'oauth2' ? {} : serverFields(spec);
     const [row] = await db
@@ -268,6 +308,9 @@ async function exchangeCode(p: OAuthProvider, pend: PendingAuth, code: string): 
       .set({ ...servers, authType: 'oauth2', protocol: spec.account.protocol, secretEnc, username: who.email, status: 'connecting', lastError: null })
       .where(eq(accounts.id, existing.id))
       .returning();
+    tokenVersion.set(existing.id, (tokenVersion.get(existing.id) ?? 0) + 1);
+    tokenCache.delete(existing.id);
+    refreshing.delete(existing.id);
     return row!;
   }
   const [row] = await db
@@ -304,27 +347,61 @@ function serverFields(spec: ProviderSpec) {
 
 const tokenCache = new Map<number, { token: string; expiresAt: number }>();
 const refreshing = new Map<number, Promise<string>>();
+// 重新授权时递增，避免并发中的旧刷新把新令牌覆写回数据库或缓存
+const tokenVersion = new Map<number, number>();
 
 async function refreshAccessToken(accountId: number): Promise<string> {
+  const ver = tokenVersion.get(accountId) ?? 0;
   // 重新读一次，拿到最新轮换过的 refresh token
   const account = await db.query.accounts.findFirst({ where: eq(accounts.id, accountId) });
   if (!account) throw new Error(L('账户不存在', 'Account not found'));
   const p = oauthProviderOf(account);
   const stored = JSON.parse(decryptSecret(account.secretEnc)) as StoredTokens;
   if (stored.accessToken && stored.expiresAt - Date.now() > 5 * 60_000) {
-    tokenCache.set(account.id, { token: stored.accessToken, expiresAt: stored.expiresAt });
+    if ((tokenVersion.get(account.id) ?? 0) === ver) tokenCache.set(account.id, { token: stored.accessToken, expiresAt: stored.expiresAt });
     return stored.accessToken;
   }
   let t: TokenResponse;
   try {
     t = await tokenRequest(p, { grant_type: 'refresh_token', refresh_token: stored.refreshToken }, account.proxyId);
   } catch (err) {
-    throw new Error(
+    if (err instanceof ActionError) throw err;
+    const label = SPECS[p].label;
+    if (err instanceof OAuthTokenError && err.code && REAUTH_ERRORS.has(err.code)) {
+      throw new OAuthRefreshError(
+        L(
+          `${label}授权已失效，请在邮箱管理里重新授权：${err.message}`,
+          `${label} authorization has expired; re-authorize it under Mailboxes: ${err.message}`,
+        ),
+        true,
+        { cause: err },
+      );
+    }
+    if (err instanceof OAuthTokenError && err.code && CLIENT_ERRORS.has(err.code)) {
+      throw new OAuthRefreshError(
+        L(
+          `${label}应用配置有误，请在设置 → 授权应用里检查 Client ID 和密钥：${err.message}`,
+          `${label} OAuth app settings are invalid; check the Client ID and secret under Settings → OAuth apps: ${err.message}`,
+        ),
+        false,
+        { cause: err },
+      );
+    }
+    const reason = refreshFailureReason(err);
+    throw new OAuthRefreshError(
       L(
-        `${SPECS[p].label}授权已失效，请在邮箱管理里重新授权：${(err as Error).message}`,
-        `${SPECS[p].label} authorization has expired; re-authorize it under Mailboxes: ${(err as Error).message}`,
+        `刷新${label}授权失败，稍后会自动重试：${reason}`,
+        `Failed to refresh ${label} authorization; will retry automatically: ${reason}`,
       ),
+      false,
+      { cause: err },
     );
+  }
+  // 刷新期间账户被重新授权：旧授权换来的令牌不能写回，以库里的新令牌为准
+  if ((tokenVersion.get(account.id) ?? 0) !== ver) {
+    const latest = await db.query.accounts.findFirst({ where: eq(accounts.id, account.id) });
+    const s = latest && (JSON.parse(decryptSecret(latest.secretEnc)) as StoredTokens);
+    return s?.accessToken || t.access_token;
   }
   // 微软会轮换 refresh token，新的要存回去；Google 通常不返回新的，沿用旧的
   const next: StoredTokens = { refreshToken: t.refresh_token ?? stored.refreshToken, accessToken: t.access_token, expiresAt: Date.now() + t.expires_in * 1000 };
@@ -345,8 +422,10 @@ export async function accountCredentials(account: Account): Promise<Credentials>
   if (cached && cached.expiresAt - Date.now() > 5 * 60_000) return { accessToken: cached.token };
   let p = refreshing.get(account.id);
   if (!p) {
-    p = refreshAccessToken(account.id).finally(() => refreshing.delete(account.id));
-    refreshing.set(account.id, p);
+    const promise = refreshAccessToken(account.id).finally(() => {
+      if (refreshing.get(account.id) === promise) refreshing.delete(account.id);
+    });
+    refreshing.set(account.id, (p = promise));
   }
   return { accessToken: await p };
 }

@@ -10,7 +10,7 @@ import { config } from '../config.js';
 import { db } from '../db/index.js';
 import { accounts, drafts, folders, type Account, type Address, type Draft } from '../db/schema.js';
 import { audit } from '../lib/audit.js';
-import { accountCredentials } from './oauth.js';
+import { accountCredentials, OAuthRefreshError } from './oauth.js';
 import { proxyUrlById } from './proxy.js';
 import { bus } from '../lib/events.js';
 import { syncEngine } from '../sync/engine.js';
@@ -50,6 +50,7 @@ function createTransport(p: SmtpParams) {
 type SmtpError = Error & { code?: string; responseCode?: number; response?: string; command?: string };
 
 export function describeSmtpError(err: unknown): string {
+  if (err instanceof OAuthRefreshError) return err.message;
   const e = err as SmtpError;
   const text = `${e?.response ?? ''} ${e?.message ?? ''}`;
   if (/STARTTLS/i.test(text))

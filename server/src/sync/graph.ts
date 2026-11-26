@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { accounts, type Account } from '../db/schema.js';
-import { accountCredentials } from '../services/oauth.js';
+import { accountCredentials, OAuthRefreshError } from '../services/oauth.js';
 import { fetchVia, proxyUrlById } from '../services/proxy.js';
 import { L } from '../i18n/index.js';
 
@@ -108,6 +108,7 @@ export async function graphBatch(account: Account | number, items: BatchItem[]):
 }
 
 export function describeGraphError(err: unknown): string {
+  if (err instanceof OAuthRefreshError) return err.message;
   if (err instanceof GraphError) {
     if (err.code === 'MailboxNotEnabledForRESTAPI') return L('这个账号的邮箱不支持 Graph API', "This account's mailbox does not support the Graph API");
     if (err.status === 401) return L('微软授权已失效：请在邮箱管理里重新授权', 'Microsoft authorization has expired: re-authorize it under Mailboxes');
