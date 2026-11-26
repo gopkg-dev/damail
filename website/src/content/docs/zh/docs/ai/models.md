@@ -14,8 +14,8 @@ DaMail 的 AI 功能**默认关闭**，也不依赖任何 DaMail 自己的云服
 | 字段 | 说明 |
 |---|---|
 | 名称 | 自己起的名字，如「Claude 官方」「DeepSeek」 |
-| 服务商 | **Anthropic** 或 **OpenAI 兼容接口** |
-| 接口地址 | Anthropic 官方接口留空，也可以填兼容 Anthropic 协议的代理地址；OpenAI 兼容接口必填，DaMail 会调用 `{接口地址}/chat/completions` 和 `{接口地址}/models` |
+| 服务商 | **Anthropic**、**OpenAI Chat** 或 **OpenAI Responses** |
+| 接口地址 | Anthropic 官方接口留空，也可以填兼容 Anthropic 协议的代理地址；OpenAI 接口必填，DaMail 会调用 `{接口地址}/chat/completions`（OpenAI Chat）或 `{接口地址}/responses`（OpenAI Responses），以及 `{接口地址}/models` |
 | API Key | 加密保存在你的数据库里，页面上只显示首尾几位 |
 | 可用模型 | 点「同步上游」拉取模型列表后勾选要用的，或者直接输入模型名添加 |
 | 模型价格 | 美元 / 百万 tokens，只用来统计费用，可以点「填充参考价格」；中转站按官方价打折时填**倍率** |
@@ -28,11 +28,11 @@ DaMail 的 AI 功能**默认关闭**，也不依赖任何 DaMail 自己的云服
 | 服务商 | 服务商类型 | 接口地址 |
 |---|---|---|
 | Anthropic Claude | Anthropic | 留空 |
-| DeepSeek | OpenAI 兼容 | `https://api.deepseek.com` |
-| 通义千问（百炼） | OpenAI 兼容 | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
-| Moonshot（Kimi） | OpenAI 兼容 | `https://api.moonshot.cn/v1` |
-| OpenAI | OpenAI 兼容 | `https://api.openai.com/v1` |
-| 本地 Ollama | OpenAI 兼容 | `http://<Ollama 所在主机>:11434/v1` |
+| DeepSeek | OpenAI Chat | `https://api.deepseek.com` |
+| 通义千问（百炼） | OpenAI Chat | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| Moonshot（Kimi） | OpenAI Chat | `https://api.moonshot.cn/v1` |
+| OpenAI | OpenAI Responses / OpenAI Chat | `https://api.openai.com/v1` |
+| 本地 Ollama | OpenAI Chat | `http://<Ollama 所在主机>:11434/v1` |
 
 :::note[本地模型]
 DaMail 跑在容器里时，`localhost` 指的是容器自己。Ollama 装在宿主机上时，填宿主机的局域网地址，或者在 Compose 里给 damail 服务配置 `extra_hosts: ["host.docker.internal:host-gateway"]` 后填 `http://host.docker.internal:11434/v1`。模型需要能稳定输出 JSON，参数太小的模型分类效果会比较差。
@@ -50,7 +50,7 @@ DaMail 跑在容器里时，`localhost` 指的是容器自己。Ollama 装在宿
 
 助手和翻译默认**跟随默认渠道和模型**；换了渠道需要重新选模型。
 
-**推理强度**（思考强度）控制模型思考多久：分类任务用「低」就够，越高越慢、越费 token。Anthropic 支持 low / medium / high / xhigh / max，OpenAI 兼容接口支持 low / medium / high。
+**推理强度**（思考强度）控制模型思考多久：分类任务用「低」就够，越高越慢、越费 token。Anthropic 支持 low / medium / high / xhigh / max，OpenAI Chat 与 OpenAI Responses 支持 low / medium / high。
 
 改完点「保存设置」，再打开顶部的**启用 AI** 开关。每个模型旁边的「测试」按钮会真实调用一次，显示耗时或错误信息。
 

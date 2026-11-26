@@ -78,6 +78,7 @@ export async function trackAi<T>(c: CallInfo, purpose: AiPurpose, run: (usage: A
 
 type AnthropicUsage = { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null };
 type OpenAIUsage = { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } | null };
+type OpenAIResponsesUsage = { input_tokens?: number; output_tokens?: number; input_tokens_details?: { cached_tokens?: number } | null };
 
 /** Anthropic 的 input_tokens 不含缓存部分，这里统一成总输入 */
 export function setAnthropicUsage(into: AiUsage, u: AnthropicUsage | null | undefined) {
@@ -95,6 +96,13 @@ export function setOpenAIUsage(into: AiUsage, u: OpenAIUsage | null | undefined)
   if (typeof u.prompt_tokens === 'number') into.inputTokens = u.prompt_tokens;
   if (typeof u.completion_tokens === 'number') into.outputTokens = u.completion_tokens;
   if (typeof u.prompt_tokens_details?.cached_tokens === 'number') into.cacheReadTokens = u.prompt_tokens_details.cached_tokens;
+}
+
+export function setOpenAIResponsesUsage(into: AiUsage, u: OpenAIResponsesUsage | null | undefined) {
+  if (!u) return;
+  if (typeof u.input_tokens === 'number') into.inputTokens = u.input_tokens;
+  if (typeof u.output_tokens === 'number') into.outputTokens = u.output_tokens;
+  if (typeof u.input_tokens_details?.cached_tokens === 'number') into.cacheReadTokens = u.input_tokens_details.cached_tokens;
 }
 
 export type AiRequestFilter = { purpose?: AiPurpose; model?: string; channelId?: string; status?: 'ok' | 'error' };

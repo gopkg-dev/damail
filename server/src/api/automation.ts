@@ -8,6 +8,7 @@ import { L, t } from '../i18n/index.js';
 import { audit } from '../lib/audit.js';
 import { ActionError } from '../services/actions.js';
 import {
+  AI_PROVIDERS,
   CATEGORIES,
   categoryLabel,
   channelPrice,
@@ -46,7 +47,7 @@ const aiChannelInput = z.object({
     .trim()
     .min(1, { error: () => L('请填写渠道名称', 'Enter a channel name') })
     .max(100),
-  provider: z.enum(['anthropic', 'openai']),
+  provider: z.enum(AI_PROVIDERS),
   baseUrl: z
     .url({ error: () => L('Base URL 格式不正确', 'Invalid base URL') })
     .nullish()

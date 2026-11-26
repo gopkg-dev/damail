@@ -413,7 +413,7 @@ export type ChannelDelivery = {
 
 export type AiEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
-export type AiProvider = 'anthropic' | 'openai';
+export type AiProvider = 'anthropic' | 'openai' | 'openai-responses';
 
 /** 美元 / 百万 tokens */
 export type ModelPrice = { input: number; output: number; cacheRead?: number | null; cacheWrite?: number | null };

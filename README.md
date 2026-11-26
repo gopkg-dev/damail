@@ -25,7 +25,7 @@ AI agents get scoped, auditable access to it through MCP and a REST API.
 ## Why DaMail
 
 - **One inbox for every account.** DaMail works with Gmail, Outlook, iCloud, QQ Mail, NetEase 163, Tencent and Alibaba business mail, and any IMAP server. Mail syncs in real time and is threaded and searchable. Changes you make are written back to the mail server.
-- **AI that works for you.** It can sort mail, set priority, write summaries and pull out codes, bills and to-dos. It uses the model you choose: Claude, any OpenAI-compatible API, or a local model. AI is off by default.
+- **AI that works for you.** It can sort mail, set priority, write summaries and pull out codes, bills and to-dos. It uses the model you choose: Claude, OpenAI (Chat Completions or Responses API), any OpenAI-compatible API, or a local model. AI is off by default.
 - **Agents get only the access you grant.** Claude Duet, ChatGPT dots, Grok Bot, Meta Muse, Claude Code, Cursor and other agents use credentials issued by DaMail. Each credential covers only the permissions and mailboxes you pick. By default, mail an agent writes waits for your approval.
 - **Your data stays with you.** You host it yourself. Mailbox credentials are encrypted with your own master key. HTML mail renders in a sandbox with remote images blocked. No third-party service sits in between.
 

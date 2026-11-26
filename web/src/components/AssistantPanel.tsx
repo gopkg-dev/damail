@@ -46,8 +46,12 @@ type ModelOptions = {
   default: { channelId: string | null; model: string; provider: AiProvider; effort: AiEffort | null };
 };
 
-// OpenAI 兼容接口的 reasoning_effort 一般只认 low / medium / high
-const EFFORTS: Record<AiProvider, AiEffort[]> = { anthropic: ['low', 'medium', 'high', 'xhigh', 'max'], openai: ['low', 'medium', 'high'] };
+// OpenAI 兼容 / Responses 接口的推理强度一般只认 low / medium / high
+const EFFORTS: Record<AiProvider, AiEffort[]> = {
+  anthropic: ['low', 'medium', 'high', 'xhigh', 'max'],
+  openai: ['low', 'medium', 'high'],
+  'openai-responses': ['low', 'medium', 'high'],
+};
 // 下拉的值是「渠道 id + 分隔符 + 模型名」，空串表示用模型配置里的默认
 const SEP = '\u0000';
 // 展开时对话内容的最大宽度，太宽一行读起来费劲

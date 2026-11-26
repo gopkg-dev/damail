@@ -1,11 +1,12 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod';
 import { eq } from 'drizzle-orm';
+import OpenAI from 'openai';
 import { z } from 'zod';
 import { db } from '../db/index.js';
 import { accounts, settings, type Extracted, type Message } from '../db/schema.js';
 import { decryptSecret, encryptSecret } from '../lib/crypto.js';
-import { setAnthropicUsage, setOpenAIUsage, trackAi, type AiPurpose } from './ai-usage.js';
+import { setAnthropicUsage, setOpenAIResponsesUsage, setOpenAIUsage, trackAi, type AiPurpose } from './ai-usage.js';
 import { RetryableError } from './jobs.js';
 import { parseRetryAfter, RateLimitError } from './ai-limit.js';
 import { getSystemLocale, L, t } from '../i18n/index.js';
@@ -19,7 +20,8 @@ export const categoryLabel = (c: string | null | undefined) => (c ? categoryName
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 export type Effort = (typeof EFFORTS)[number];
 
-export type AiProvider = 'anthropic' | 'openai';
+export const AI_PROVIDERS = ['anthropic', 'openai', 'openai-responses'] as const;
+export type AiProvider = (typeof AI_PROVIDERS)[number];
 
 /** 模型单价，美元 / 百万 tokens；缓存单价为空时按输入单价算 */
 export type ModelPrice = { input: number; output: number; cacheRead?: number | null; cacheWrite?: number | null };
@@ -115,7 +117,7 @@ export async function getAiSettings(): Promise<AiSettings> {
     stored = [
       {
         id: 'default',
-        name: provider === 'openai' ? t().ai.openaiCompat : 'Anthropic',
+        name: provider === 'openai' ? t().ai.openaiCompat : provider === 'openai-responses' ? t().ai.openaiResponses : 'Anthropic',
         provider: provider ?? 'anthropic',
         baseUrl: baseUrl ?? null,
         models: models ?? [],
@@ -250,26 +252,25 @@ export async function fetchUpstreamModels(c: Pick<AiChannel, 'provider' | 'baseU
       mapAnthropicError(err);
     }
   } else {
-    if (!c.baseUrl) throw new AiError(t().ai.errors.baseUrlRequired);
-    let res: Response;
+    const client = openaiClient(c, { timeout: 30_000, maxRetries: 0 });
     try {
-      res = await fetch(`${c.baseUrl.replace(/\/+$/, '')}/models`, {
-        headers: c.apiKey ? { authorization: `Bearer ${c.apiKey}` } : {},
-        signal: AbortSignal.timeout(30_000),
-      });
+      const page = await client.models.list();
+      const body = (page as unknown as { body?: { models?: Array<{ id?: unknown; name?: unknown }> } | string | null }).body;
+      if (!body || typeof body !== 'object') throw new AiError(t().ai.errors.modelsNotJson);
+      for await (const m of page) {
+        if (m.id) ids.push(m.id);
+      }
+      // 标准格式是 {data: [{id}]}，少数网关返回 {models: [{name}]}
+      if (!ids.length && Array.isArray(body.models)) {
+        ids = body.models.map((m) => String(m.id ?? m.name ?? '')).filter(Boolean);
+      }
     } catch (err) {
-      throw new AiError(t().ai.errors.connectFailed((err as Error).message));
+      if (err instanceof AiError) throw err;
+      if (err instanceof SyntaxError) throw new AiError(t().ai.errors.modelsNotJson);
+      if (err instanceof OpenAI.APIConnectionError) throw new AiError(t().ai.errors.connectFailed(err.message));
+      if (err instanceof OpenAI.APIError) throw new AiError(t().ai.errors.modelsFailed(err.status ?? 0, openaiErrorMessage(err).slice(0, 200)));
+      throw err;
     }
-    const text = await res.text();
-    if (!res.ok) throw new AiError(t().ai.errors.modelsFailed(res.status, text.slice(0, 200)));
-    let data: { data?: Array<{ id?: unknown }>; models?: Array<{ id?: unknown; name?: unknown }> };
-    try {
-      data = JSON.parse(text);
-    } catch {
-      throw new AiError(t().ai.errors.modelsNotJson);
-    }
-    // 标准格式是 {data: [{id}]}，少数网关返回 {models: [{name}]}
-    ids = (data.data ?? data.models ?? []).map((m) => String((m as { id?: unknown }).id ?? (m as { name?: unknown }).name ?? '')).filter(Boolean);
   }
   if (!ids.length) throw new AiError(t().ai.errors.noModels);
   return [...new Set(ids.map((id) => id.replace(/^models\//, '')))].sort((a, b) => a.localeCompare(b));
@@ -367,6 +368,34 @@ function anthropicClient(c: Pick<AiConfig, 'apiKey' | 'baseUrl'>) {
   return new Anthropic({ apiKey: c.apiKey, baseURL: c.baseUrl || undefined, timeout: 120_000, maxRetries: 2 });
 }
 
+export function openaiClient(c: Pick<AiConfig, 'apiKey' | 'baseUrl'>, opts?: { timeout?: number; maxRetries?: number }) {
+  if (!c.baseUrl) throw new AiError(t().ai.errors.baseUrlRequired);
+  return new OpenAI({
+    apiKey: c.apiKey || 'none',
+    baseURL: c.baseUrl.replace(/\/+$/, ''),
+    timeout: opts?.timeout ?? 120_000,
+    maxRetries: opts?.maxRetries ?? 2,
+    // 无 apiKey（如本地 Ollama）时不发伪造的 Authorization 头
+    ...(!c.apiKey ? { defaultHeaders: { Authorization: null } } : {}),
+  });
+}
+
+/** OpenAI SDK 的错误信息自带「502 」状态码前缀，界面上已经单独显示状态码，这里去掉避免重复 */
+export const openaiErrorMessage = (err: InstanceType<typeof OpenAI.APIError>) => err.message.replace(/^\d{3}\s+/, '');
+
+function mapOpenAIError(err: unknown): never {
+  if (err instanceof OpenAI.RateLimitError) {
+    throw new RateLimitError(t().ai.errors.apiError(err.status, openaiErrorMessage(err)), parseRetryAfter(err.headers?.get('retry-after')));
+  }
+  if (err instanceof OpenAI.APIConnectionError) throw new RetryableError(t().ai.errors.connectFailed(err.message));
+  if (err instanceof OpenAI.APIError) {
+    const msg = t().ai.errors.apiError(err.status, openaiErrorMessage(err));
+    if (err.status && err.status >= 500) throw new RetryableError(msg);
+    throw new AiError(msg);
+  }
+  throw err;
+}
+
 function fallbackParams(c: AiConfig) {
   return !c.baseUrl && FALLBACK_MODELS.has(c.model) ? { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' as const } : {};
 }
@@ -415,37 +444,70 @@ async function classifyWithAnthropic(c: AiConfig, content: string, purpose: AiPu
 
 /** OpenAI 兼容接口（DeepSeek、通义千问、Kimi、本地 Ollama 等）：用 JSON 模式输出，再用同一个 schema 校验 */
 async function chatCompletions(c: AiConfig, system: string, user: string, json: boolean, purpose: AiPurpose): Promise<string> {
-  if (!c.baseUrl) throw new AiError(t().ai.errors.baseUrlRequired);
-  const url = `${c.baseUrl.replace(/\/+$/, '')}/chat/completions`;
+  const client = openaiClient(c);
   return trackAi(c, purpose, async (usage) => {
-    let res: Response;
+    let res: OpenAI.Chat.Completions.ChatCompletion;
     try {
-      res = await fetch(url, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', ...(c.apiKey ? { authorization: `Bearer ${c.apiKey}` } : {}) },
-        body: JSON.stringify({
-          model: c.model,
-          messages: [
-            { role: 'system', content: system },
-            { role: 'user', content: user },
-          ],
-          ...(json ? { response_format: { type: 'json_object' } } : {}),
-        }),
-        signal: AbortSignal.timeout(120_000),
+      res = await client.chat.completions.create({
+        model: c.model,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+        ...(json ? { response_format: { type: 'json_object' as const } } : {}),
       });
     } catch (err) {
-      throw new RetryableError(t().ai.errors.connectFailed((err as Error).message));
+      mapOpenAIError(err);
     }
-    const text = await res.text();
-    if (res.status === 429) throw new RateLimitError(t().ai.errors.apiError(res.status, text.slice(0, 200)), parseRetryAfter(res.headers.get('retry-after')));
-    if (res.status >= 500) throw new RetryableError(t().ai.errors.apiError(res.status, text.slice(0, 200)));
-    if (!res.ok) throw new AiError(t().ai.errors.apiError(res.status, text.slice(0, 300)));
-    const data = JSON.parse(text) as { choices?: Array<{ message?: { content?: string } }>; usage?: Parameters<typeof setOpenAIUsage>[1] };
-    setOpenAIUsage(usage, data.usage);
-    const content = data.choices?.[0]?.message?.content;
+    setOpenAIUsage(usage, res.usage);
+    const content = res.choices?.[0]?.message?.content;
     if (!content) throw new AiError(t().ai.errors.noContent);
     return content;
   });
+}
+
+/** OpenAI Responses API（POST {baseUrl}/responses）：非流式单轮文本或 JSON 输出 */
+async function openaiResponses(c: AiConfig, system: string, user: string, json: boolean, purpose: AiPurpose): Promise<string> {
+  const client = openaiClient(c);
+  return trackAi(c, purpose, async (usage) => {
+    let res: OpenAI.Responses.Response;
+    try {
+      res = await client.responses.create({
+        model: c.model,
+        // JSON 模式要求「输入消息」里出现 json 字样，instructions 不算；
+        // 所以 JSON 模式把系统提示词（里面写了输出 JSON）作为 developer 消息放进 input
+        ...(json
+          ? {
+              input: [
+                { type: 'message' as const, role: 'developer' as const, content: system },
+                { type: 'message' as const, role: 'user' as const, content: user },
+              ],
+              text: { format: { type: 'json_object' as const } },
+            }
+          : { instructions: system, input: user }),
+        store: false,
+      });
+    } catch (err) {
+      mapOpenAIError(err);
+    }
+    setOpenAIResponsesUsage(usage, res.usage);
+    if (res.status === 'failed') throw new AiError(t().ai.errors.apiError('', res.error?.message || 'response failed'));
+    if (res.status === 'incomplete') throw new AiError(t().ai.errors.truncated);
+    // 官方响应含 object: 'response' 时 SDK 会自动计算 output_text；兼容网关漏掉 object 字段时回退拼接 output
+    const content =
+      res.output_text ||
+      (res.output ?? [])
+        .flatMap((item) => (item.type === 'message' && Array.isArray(item.content) ? item.content : []))
+        .filter((part): part is OpenAI.Responses.ResponseOutputText => part.type === 'output_text' && typeof part.text === 'string')
+        .map((part) => part.text)
+        .join('');
+    if (!content) throw new AiError(t().ai.errors.noContent);
+    return content;
+  });
+}
+
+function openaiText(c: AiConfig, system: string, user: string, json: boolean, purpose: AiPurpose): Promise<string> {
+  return c.provider === 'openai-responses' ? openaiResponses(c, system, user, json, purpose) : chatCompletions(c, system, user, json, purpose);
 }
 
 const JSON_SHAPE = `只输出一个 JSON 对象，不要其他文字，字段如下：
@@ -467,7 +529,7 @@ const LenientInsight = InsightSchema.extend({
 
 async function classifyWithOpenAI(c: AiConfig, content: string, purpose: AiPurpose, labels: PromptLabel[]): Promise<InsightOutput> {
   const system = labels.length ? `${classifySystem()}\n\n${labelsSystem(labels)}\n\n${JSON_SHAPE}${JSON_LABELS}` : `${classifySystem()}\n\n${JSON_SHAPE}`;
-  const raw = await chatCompletions(c, system, content, true, purpose);
+  const raw = await openaiText(c, system, content, true, purpose);
   const json = raw.replace(/^```(?:json)?\s*|\s*```$/g, '');
   let data: unknown;
   try {
@@ -490,11 +552,11 @@ export async function classifyMessage(m: Message, config?: AiConfig, labels: Pro
   return { insight: toInsight(out, c.model), labelIds: labelIdsOf(out, labels) };
 }
 
-/** 通用的文本生成（回复起草、日报摘要等），按配置走 Anthropic 或 OpenAI 兼容接口 */
+/** 通用的文本生成（回复起草、日报摘要等），按配置走 Anthropic 或 OpenAI 兼容 / Responses 接口 */
 export async function generateText(system: string, user: string, opts: { purpose: AiPurpose; maxTokens?: number; config?: AiConfig }): Promise<string> {
   const c = opts.config ?? (await getAiConfig());
   if (!c.enabled) throw new AiError(t().ai.errors.disabled);
-  if (c.provider === 'openai') return (await chatCompletions(c, system, user, false, opts.purpose)).trim();
+  if (c.provider !== 'anthropic') return (await openaiText(c, system, user, false, opts.purpose)).trim();
 
   return trackAi(c, opts.purpose, async (usage) => {
     const client = anthropicClient(c);
@@ -564,8 +626,8 @@ export async function generateJson<T>(
 ): Promise<T> {
   const c = opts.config ?? (await getAiConfig());
   if (!c.enabled) throw new AiError(t().ai.errors.disabled);
-  if (c.provider === 'openai') {
-    const raw = await chatCompletions(
+  if (c.provider !== 'anthropic') {
+    const raw = await openaiText(
       c,
       `${system}\n\n${L('只输出一个 JSON 对象，不要其他文字，格式：', 'Output only one JSON object and nothing else, in this format:')}\n${opts.shape}`,
       user,

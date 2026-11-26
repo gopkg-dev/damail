@@ -14,8 +14,8 @@ Click **Add channel**:
 | Field | Description |
 | --- | --- |
 | Name | Anything you like, such as "Claude" or "DeepSeek" |
-| Provider | **Anthropic** or **OpenAI-compatible API** |
-| Base URL | Leave empty for the official Anthropic API, or enter an Anthropic-compatible proxy. Required for OpenAI-compatible APIs; DaMail calls `{Base URL}/chat/completions` and `{Base URL}/models` |
+| Provider | **Anthropic**, **OpenAI Chat**, or **OpenAI Responses** |
+| Base URL | Leave empty for the official Anthropic API, or enter an Anthropic-compatible proxy. Required for OpenAI APIs; DaMail calls `{Base URL}/chat/completions` (OpenAI Chat) or `{Base URL}/responses` (OpenAI Responses), plus `{Base URL}/models` |
 | API key | Stored encrypted in your database; only the first and last few characters are shown |
 | Models | Click **Sync upstream** to fetch the model list and tick the ones you want, or type model names |
 | Prices | USD per million tokens, used only for cost tracking. **Fill reference prices** fills in common models; set a **rate** if a reseller discounts official prices |
@@ -28,11 +28,11 @@ You can add several channels — for example a cheap DeepSeek channel for analys
 | Provider | Type | Base URL |
 | --- | --- | --- |
 | Anthropic Claude | Anthropic | Leave empty |
-| OpenAI | OpenAI-compatible | `https://api.openai.com/v1` |
-| DeepSeek | OpenAI-compatible | `https://api.deepseek.com` |
-| Qwen (Alibaba Cloud) | OpenAI-compatible | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
-| Moonshot (Kimi) | OpenAI-compatible | `https://api.moonshot.cn/v1` |
-| Local Ollama | OpenAI-compatible | `http://<ollama-host>:11434/v1` |
+| OpenAI | OpenAI Responses / OpenAI Chat | `https://api.openai.com/v1` |
+| DeepSeek | OpenAI Chat | `https://api.deepseek.com` |
+| Qwen (Alibaba Cloud) | OpenAI Chat | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| Moonshot (Kimi) | OpenAI Chat | `https://api.moonshot.cn/v1` |
+| Local Ollama | OpenAI Chat | `http://<ollama-host>:11434/v1` |
 
 :::note[Local models]
 Inside a container, `localhost` is the container itself. If Ollama runs on the host, use the host's LAN address, or add `extra_hosts: ["host.docker.internal:host-gateway"]` to the damail service in Compose and use `http://host.docker.internal:11434/v1`. The model must produce reliable JSON; very small models categorize poorly.
@@ -50,7 +50,7 @@ There are three model settings at the bottom of the page:
 
 The assistant and translation **follow the default channel and model** unless you change them; switching channel means picking a model again.
 
-**Effort** controls how long the model thinks: "low" is enough for categorizing; higher is slower and uses more tokens. Anthropic supports low / medium / high / xhigh / max; OpenAI-compatible APIs support low / medium / high.
+**Effort** controls how long the model thinks: "low" is enough for categorizing; higher is slower and uses more tokens. Anthropic supports low / medium / high / xhigh / max; OpenAI Chat and OpenAI Responses support low / medium / high.
 
 Click **Save settings**, then turn on **Enable AI** at the top. The **Test** button next to each model makes a real call and shows the latency or the error.
 

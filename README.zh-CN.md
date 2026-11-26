@@ -25,7 +25,7 @@
 ## 为什么是 DaMail
 
 - **一个收件箱管所有邮箱**：Gmail、Outlook、iCloud、QQ 邮箱、网易 163、腾讯企业邮、阿里企业邮以及任意 IMAP 邮箱，实时同步、会话归并、中文搜索，操作写回邮箱服务器。
-- **AI 为你干活**：分类、判断优先级、写摘要，提取验证码、账单和待办。模型由你选：Claude、任意 OpenAI 兼容接口或本地模型。默认关闭。
+- **AI 为你干活**：分类、判断优先级、写摘要，提取验证码、账单和待办。模型由你选：Claude、OpenAI（Chat Completions / Responses 接口）、任意 OpenAI 兼容接口或本地模型。默认关闭。
 - **给 Agent 的只是你授予的权限**：Claude Duet、ChatGPT dots、Grok Bot、Meta Muse、Claude Code、Cursor 等 Agent 用的是 DaMail 签发的凭证，只覆盖你勾选的权限和邮箱；Agent 写的邮件默认进入待审批。
 - **数据在自己手里**：自己部署，邮箱凭证用你自己的主密钥加密，HTML 邮件在沙箱中渲染并拦截远程图片，中间没有第三方服务。
 
